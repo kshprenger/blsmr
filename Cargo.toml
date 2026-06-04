@@ -1,4 +1,8 @@
 [workspace]
+resolver = "3"
 members = [
     "crates/*",
 ]
+
+[workspace.dependencies]
+dscale = {git = "https://codeberg.org/kshprenger/dscale.git", branch = "master"}

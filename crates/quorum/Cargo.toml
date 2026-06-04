@@ -1,0 +1,10 @@
+[package]
+name = "quorum"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+dscale = {workspace = true}
+
+[dev-dependencies]
+rand = {version = "0.10.1", features = ["std_rng"]}

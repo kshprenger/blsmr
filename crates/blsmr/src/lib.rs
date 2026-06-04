@@ -1,14 +1,8 @@
-pub fn add(left: u64, right: u64) -> u64 {
-    left + right
-}
+pub mod dds;
+pub mod log;
+pub mod process;
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn it_works() {
-        let result = add(2, 2);
-        assert_eq!(result, 4);
-    }
-}
+pub const POOL_BLSMR: &str = "blsmr";
+pub const KEY_SUBMIT_CMD_INTERVAL: &str = "submit_interval";
+pub const KEY_QUORUM_SYSTEM: &str = "quorum_system";
+pub const KEY_ANNOUNCE_TIMEOUT: &str = "announce_timeout";

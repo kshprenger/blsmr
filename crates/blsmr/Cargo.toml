@@ -4,3 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+dscale = {workspace = true}
+client = {path = "../client"}
+quorum = {path = "../quorum"}
+rustc-hash = "2.1.2"
