@@ -1,16 +1,26 @@
+use std::collections::HashSet;
+
 use client::{CmdId, Command};
 use dscale::{
-    Jiffies, dscale_debug, helpers,
+    Jiffies, dscale_debug,
     rand::{SeedableRng, rngs::SmallRng},
-    services::kv,
+    services::kv::{self},
 };
 use rustc_hash::FxHashMap;
 
-use crate::{KEY_ANNOUNCE_TIMEOUT, KEY_QUORUM_SYSTEM, POOL_BLSMR, log::CmdLog};
+use crate::{
+    BLSMRProtocol, KEY_ANNOUNCE_TIMEOUT, KEY_PROTOCOL_TYPE, KEY_QUORUM_SYSTEM, POOL_BLSMR,
+    log::CmdLog,
+};
 
 pub enum AnnounceStatus {
     DoNothing,
-    QuorumReady(Vec<Res>),
+    QuorumReady(QuorumReady),
+}
+
+pub struct QuorumReady {
+    pub quorum: Vec<Res>,
+    pub allow_fastpath: bool,
 }
 
 #[derive(Debug)]
@@ -34,10 +44,11 @@ impl dscale::Message for Announce {}
 
 pub(crate) struct DDS {
     rng: SmallRng,
+    protocol_type: BLSMRProtocol,
     peer_number: usize,
     bqs: quorum::QuorumSystem,
     log: CmdLog,
-    pending_announce_quorums: FxHashMap<CmdId, helpers::Quorum<Res>>,
+    pending_announce_quorums: FxHashMap<CmdId, Vec<Res>>,
     announce_timeout: dscale::Jiffies,
     announce_force_timers: FxHashMap<dscale::TimerId, CmdId>,
 }
@@ -46,6 +57,7 @@ impl Default for DDS {
     fn default() -> Self {
         Self {
             rng: SmallRng::seed_from_u64(kv::seed()),
+            protocol_type: kv::get::<BLSMRProtocol>(KEY_PROTOCOL_TYPE),
             peer_number: dscale::list_pool(POOL_BLSMR).len(),
             bqs: kv::get::<quorum::QuorumSystem>(KEY_QUORUM_SYSTEM),
             log: CmdLog::default(),
@@ -63,27 +75,24 @@ impl DDS {
     }
 
     fn prepare_announce(&mut self, cmd: &client::Command) {
-        match self.announce_timeout {
-            Jiffies(0) => {
-                self.pending_announce_quorums
-                    .insert(cmd.id, helpers::Quorum::new(self.bqs.size()));
-            }
-            timeout @ _ => {
-                self.pending_announce_quorums
-                    .insert(cmd.id, helpers::Quorum::new(self.peer_number));
+        match self.protocol_type {
+            BLSMRProtocol::Wintermute => {
+                debug_assert!(self.announce_timeout != Jiffies(0));
                 self.announce_force_timers
-                    .insert(dscale::schedule_timer_after(timeout), cmd.id);
+                    .insert(dscale::schedule_timer_after(self.announce_timeout), cmd.id);
             }
+            _ => {}
         }
+        self.pending_announce_quorums.insert(cmd.id, Vec::new());
     }
 
     fn send_announce(&mut self, cmd: client::Command) {
-        match self.announce_timeout {
-            Jiffies(0) => dscale::broadcast_within_pool(POOL_BLSMR, Announce::Req(Req { cmd })),
-            _ => dscale::send_many(
-                self.bqs.choose_random_quorum(&mut self.rng), // 3Jane
+        match self.protocol_type {
+            BLSMRProtocol::ThreeJane => dscale::send_many(
+                self.bqs.choose_random_quorum(&mut self.rng),
                 Announce::Req(Req { cmd }),
             ),
+            _ => dscale::broadcast_within_pool(POOL_BLSMR, Announce::Req(Req { cmd })),
         }
     }
 
@@ -103,10 +112,22 @@ impl DDS {
                 match self.pending_announce_quorums.get_mut(&res.id) {
                     None => panic!("failed to find pending quorum for cmd"),
                     Some(quorum) => {
-                        if let Some(quorum) = quorum.add(res.clone()) {
-                            self.pending_announce_quorums.remove(&res.id);
+                        quorum.push(res.clone());
+                        let ready = match self.protocol_type {
+                            BLSMRProtocol::Wintermute => quorum.len() == self.peer_number,
+                            _ => self.bqs.is_quorum(quorum.iter().map(|res| res.id.pid)),
+                        };
+                        if ready {
+                            let quorum = self
+                                .pending_announce_quorums
+                                .remove(&res.id)
+                                .expect("no quorum");
                             dscale_debug!("quorum ready for CmdId: {:?}", res.id);
-                            return AnnounceStatus::QuorumReady(quorum);
+                            let allow_fastpath = self.allow_fastpath(&quorum);
+                            return AnnounceStatus::QuorumReady(QuorumReady {
+                                quorum,
+                                allow_fastpath,
+                            });
                         }
                     }
                 }
@@ -127,14 +148,16 @@ impl DDS {
         match self.pending_announce_quorums.get(&cmd_id) {
             None => unreachable!("quorum not found"),
             Some(quorum) => {
-                if quorum.size() >= self.bqs.size() {
+                if self.is_quorum(quorum) {
+                    let allow_fastpath = self.allow_fastpath(quorum);
                     let results = self
                         .pending_announce_quorums
                         .remove(&cmd_id)
-                        .expect("quorum not found")
-                        .force_extract()
-                        .expect("quorum was already exhausted");
-                    AnnounceStatus::QuorumReady(results)
+                        .expect("quorum not found");
+                    AnnounceStatus::QuorumReady(QuorumReady {
+                        quorum: results,
+                        allow_fastpath,
+                    })
                 } else {
                     dscale::dscale_warn!("quorum was not reached until timeout");
                     AnnounceStatus::DoNothing
@@ -142,7 +165,108 @@ impl DDS {
             }
         }
     }
-    pub(super) fn is_quorum(&self, pids: impl Iterator<Item = dscale::Pid> + Clone) -> bool {
-        self.bqs.is_quorum(pids)
+    pub(super) fn is_quorum(&self, res: &Vec<Res>) -> bool {
+        self.bqs.is_quorum(res.iter().map(|res| res.id.pid))
+    }
+
+    fn allow_fastpath(&self, quorum: &[Res]) -> bool {
+        if quorum.len() != self.peer_number {
+            return false;
+        }
+        let first = &quorum[0].conflicts;
+        let first_ids: HashSet<CmdId> = first.iter().map(|cmd| cmd.id).collect();
+        quorum[1..].iter().all(|res| {
+            res.conflicts.len() == first.len()
+                && res.conflicts.iter().all(|cmd| first_ids.contains(&cmd.id))
+        })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_dds(peer_number: usize) -> DDS {
+        DDS {
+            rng: SmallRng::seed_from_u64(0),
+            protocol_type: BLSMRProtocol::EPaxos,
+            peer_number,
+            bqs: quorum::QuorumSystem::new_dissemination(vec![0, 1, 2]),
+            log: CmdLog::default(),
+            pending_announce_quorums: FxHashMap::default(),
+            announce_timeout: Jiffies(0),
+            announce_force_timers: FxHashMap::default(),
+        }
+    }
+
+    fn res_with_conflicts(pid: dscale::Pid, conflict_ids: &[usize]) -> Res {
+        Res {
+            id: CmdId { pid, id: 0 },
+            conflicts: conflict_ids
+                .iter()
+                .map(|&id| Command {
+                    id: CmdId { pid: 0, id },
+                    key: 0,
+                })
+                .collect(),
+        }
+    }
+
+    #[test]
+    fn allow_fastpath_true_when_full_quorum_agrees_on_conflicts() {
+        let dds = make_dds(3);
+        let quorum = vec![
+            res_with_conflicts(0, &[1, 2]),
+            res_with_conflicts(1, &[1, 2]),
+            res_with_conflicts(2, &[1, 2]),
+        ];
+
+        assert!(dds.allow_fastpath(&quorum));
+    }
+
+    #[test]
+    fn allow_fastpath_true_regardless_of_conflict_order() {
+        let dds = make_dds(2);
+        let quorum = vec![
+            res_with_conflicts(0, &[1, 2, 3]),
+            res_with_conflicts(1, &[3, 1, 2]),
+        ];
+
+        assert!(dds.allow_fastpath(&quorum));
+    }
+
+    #[test]
+    fn allow_fastpath_true_when_no_conflicts_reported() {
+        let dds = make_dds(2);
+        let quorum = vec![res_with_conflicts(0, &[]), res_with_conflicts(1, &[])];
+
+        assert!(dds.allow_fastpath(&quorum));
+    }
+
+    #[test]
+    fn allow_fastpath_false_when_quorum_smaller_than_peer_number() {
+        let dds = make_dds(3);
+        let quorum = vec![res_with_conflicts(0, &[1]), res_with_conflicts(1, &[1])];
+
+        assert!(!dds.allow_fastpath(&quorum));
+    }
+
+    #[test]
+    fn allow_fastpath_false_when_conflicts_differ() {
+        let dds = make_dds(2);
+        let quorum = vec![res_with_conflicts(0, &[1, 2]), res_with_conflicts(1, &[1, 3])];
+
+        assert!(!dds.allow_fastpath(&quorum));
+    }
+
+    #[test]
+    fn allow_fastpath_false_when_conflict_counts_differ() {
+        let dds = make_dds(2);
+        let quorum = vec![
+            res_with_conflicts(0, &[1, 2]),
+            res_with_conflicts(1, &[1, 2, 2]),
+        ];
+
+        assert!(!dds.allow_fastpath(&quorum));
     }
 }
