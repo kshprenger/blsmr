@@ -1,0 +1,2 @@
+key_count,submit_interval,announce_timeout,latency_low,latency_high,conflict_rate_pct,avg_latency_jiffies
+2,10,500,20,20,43.1455,96.5802

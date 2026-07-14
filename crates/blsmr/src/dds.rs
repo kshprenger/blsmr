@@ -27,6 +27,7 @@ pub struct QuorumReady {
 pub enum Announce {
     Req(Req),
     Res(Res),
+    Commit(Commit),
 }
 
 #[derive(Debug)]
@@ -38,6 +39,12 @@ pub struct Req {
 pub struct Res {
     pub id: client::CmdId,
     pub conflicts: Vec<Command>,
+}
+
+#[derive(Debug)]
+pub struct Commit {
+    pub cmd_id: CmdId,
+    pub deps: Vec<CmdId>,
 }
 
 impl dscale::Message for Announce {}
@@ -103,14 +110,19 @@ impl DDS {
                     from,
                     Announce::Res(Res {
                         id: req.cmd.id,
-                        conflicts: self.log.conflicts(req.cmd.clone()),
+                        conflicts: self.log.submit(req.cmd.clone()),
                     }),
                 );
                 AnnounceStatus::DoNothing
             }
+            Announce::Commit(commit) => {
+                self.log.commit(commit.cmd_id, commit.deps.clone());
+                AnnounceStatus::DoNothing
+            }
             Announce::Res(res) => {
                 match self.pending_announce_quorums.get_mut(&res.id) {
-                    None => panic!("failed to find pending quorum for cmd"),
+                    // Already decided via the message path or the force timeout; a straggler's reply.
+                    None => {}
                     Some(quorum) => {
                         quorum.push(res.clone());
                         let ready = match self.protocol_type {
@@ -146,7 +158,8 @@ impl DDS {
             .remove(&id)
             .expect("wrong timer id");
         match self.pending_announce_quorums.get(&cmd_id) {
-            None => unreachable!("quorum not found"),
+            // Already decided via the message path before this force timeout fired.
+            None => AnnounceStatus::DoNothing,
             Some(quorum) => {
                 if self.is_quorum(quorum) {
                     let allow_fastpath = self.allow_fastpath(quorum);
@@ -180,6 +193,16 @@ impl DDS {
                 && res.conflicts.iter().all(|cmd| first_ids.contains(&cmd.id))
         })
     }
+}
+
+pub(super) fn union_deps(quorum: &[Res]) -> Vec<CmdId> {
+    let mut deps: Vec<CmdId> = quorum
+        .iter()
+        .flat_map(|res| res.conflicts.iter().map(|cmd| cmd.id))
+        .collect();
+    deps.sort();
+    deps.dedup();
+    deps
 }
 
 #[cfg(test)]
@@ -254,7 +277,10 @@ mod tests {
     #[test]
     fn allow_fastpath_false_when_conflicts_differ() {
         let dds = make_dds(2);
-        let quorum = vec![res_with_conflicts(0, &[1, 2]), res_with_conflicts(1, &[1, 3])];
+        let quorum = vec![
+            res_with_conflicts(0, &[1, 2]),
+            res_with_conflicts(1, &[1, 3]),
+        ];
 
         assert!(!dds.allow_fastpath(&quorum));
     }

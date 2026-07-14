@@ -1,6 +1,6 @@
-use dscale::rand::{Rng, seq::IndexedRandom};
+use dscale::rand::Rng;
 
-#[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
+#[derive(Debug, PartialEq, Eq, Hash, Clone, Copy, PartialOrd, Ord)]
 pub struct CmdId {
     pub pid: dscale::Pid,
     pub id: usize,
@@ -12,15 +12,14 @@ pub struct Command {
     pub key: usize, // conflicts
 }
 
-pub const KEY_SET: [usize; 5] = [1, 2, 3, 4, 5];
-
-pub fn create_cmd(rng: &mut impl Rng) -> Command {
+pub fn create_cmd(rng: &mut impl Rng, key_count: usize) -> Command {
+    use dscale::rand::prelude::IteratorRandom;
     Command {
         id: CmdId {
             pid: dscale::pid(),
             id: dscale::unique_id(),
         },
-        key: *KEY_SET.choose(rng).expect("choose failed"),
+        key: (0..key_count).choose(rng).expect("choose failed"),
     }
 }
 
