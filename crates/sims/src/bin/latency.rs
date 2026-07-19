@@ -2,14 +2,16 @@ use std::fs::File;
 use std::io::Write;
 
 use blsmr::{
-    BLSMRProtocol, KEY_ANNOUNCE_TIMEOUT, KEY_AVG_COMMIT_LATENCY, KEY_CONFLICT_RATE, KEY_KEY_COUNT,
-    KEY_PROTOCOL_TYPE, KEY_QUORUM_SYSTEM, KEY_SUBMIT_INTERVAL, POOL_BLSMR, log, process::BLSMR,
+    BLSMRProtocol, KEY_ANNOUNCE_TIMEOUT, KEY_AVG_COMMIT_LATENCY, KEY_COMMIT_LATENCIES,
+    KEY_CONFLICT_RATE, KEY_KEY_COUNT, KEY_PROTOCOL_TYPE, KEY_QUORUM_SYSTEM, KEY_SUBMIT_INTERVAL,
+    POOL_BLSMR, log, process::BLSMR,
 };
 use dscale::{BandwidthConfig, Distr, Jiffies, SimulationBuilder, mpi, services::kv};
 use itertools::Itertools;
 
 const REPLICAS: usize = 11;
 const TIME_BUDGET: Jiffies = Jiffies(200_000);
+const BLSMR_UNIFORM_POOL: &str = "blsmr_uniform";
 
 #[derive(Clone, Copy)]
 struct Params {
@@ -20,7 +22,7 @@ struct Params {
 }
 
 fn sweep() -> Vec<Params> {
-    let key_counts = [1usize, 2, 4, 8, 16, 32, 64, 128, 256];
+    let key_counts = [1usize, 16, 128, 256, 1024, 65535];
     let submit_intervals = [
         Jiffies(1),
         Jiffies(2),
@@ -62,9 +64,9 @@ fn sweep() -> Vec<Params> {
 
 fn run_once(params: Params) -> (Params, f64, f64) {
     let mut sim = SimulationBuilder::new()
-        .add_pool::<BLSMR>(POOL_BLSMR, REPLICAS)
+        .add_pool::<BLSMR>(BLSMR_UNIFORM_POOL, REPLICAS)
         .default_bandwidth(BandwidthConfig::Unbounded)
-        .within_pool_latency(POOL_BLSMR, params.latency)
+        .within_pool_latency(BLSMR_UNIFORM_POOL, params.latency)
         .time_budget(TIME_BUDGET)
         .seed(42)
         .seq_sched()
@@ -79,6 +81,7 @@ fn run_once(params: Params) -> (Params, f64, f64) {
         quorum::QuorumSystem::new_dissemination(dscale::list_pool(POOL_BLSMR)),
     );
     kv::set::<(usize, usize)>(KEY_AVG_COMMIT_LATENCY, (0, 0));
+    kv::set::<Vec<Jiffies>>(KEY_COMMIT_LATENCIES, Vec::new());
     kv::set::<(usize, usize)>(KEY_CONFLICT_RATE, (0, 0));
 
     sim.run_full_budget();

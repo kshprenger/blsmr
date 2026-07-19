@@ -3,7 +3,7 @@ use std::collections::{HashMap, HashSet};
 use client::{CmdId, Command};
 use dscale::services::kv;
 
-use crate::{KEY_AVG_COMMIT_LATENCY, KEY_CONFLICT_RATE};
+use crate::{KEY_AVG_COMMIT_LATENCY, KEY_COMMIT_LATENCIES, KEY_CONFLICT_RATE};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Phase {
@@ -90,7 +90,7 @@ impl CmdLog {
             entry.phase = Phase::Stable;
             let latency = dscale::now() - entry.submitted_at;
             let key = entry.cmd.as_ref().map(|cmd| cmd.key);
-            record_latency(latency);
+            record_latency(latency, id.pid == dscale::pid());
             self.try_execute(id);
             if let Some(bucket) = key.and_then(|key| self.by_key.get_mut(&key)) {
                 bucket.retain(|&bucketed| bucketed != id);
@@ -227,11 +227,16 @@ impl CmdLog {
     }
 }
 
-fn record_latency(latency: dscale::Jiffies) {
+fn record_latency(latency: dscale::Jiffies, record_sample: bool) {
     kv::modify::<(usize, usize)>(KEY_AVG_COMMIT_LATENCY, |(sum, count)| {
         *sum += latency.0;
         *count += 1;
     });
+    if record_sample {
+        kv::modify::<Vec<dscale::Jiffies>>(KEY_COMMIT_LATENCIES, |latencies| {
+            latencies.push(latency);
+        });
+    }
 }
 
 pub fn average_commit_latency() -> f64 {

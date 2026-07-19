@@ -22,7 +22,7 @@ impl QuorumSystem {
 
 impl QuorumSystem {
     pub(super) fn size(&self) -> usize {
-        self.m * (self.pids.len() / self.f) - 1
+        self.m * ((self.pids.len() - 1) / self.f) + self.m - 1
     }
     pub(super) fn choose_random_quorum(&mut self, rng: &mut impl Rng) -> &[dscale::Pid] {
         let size = self.size();

@@ -68,6 +68,12 @@ mod tests {
     }
 
     #[test]
+    fn dissemination_size_for_small_clusters() {
+        assert_eq!(QuorumSystem::new_dissemination((0..2).collect()).size(), 1);
+        assert_eq!(QuorumSystem::new_dissemination((0..4).collect()).size(), 3);
+    }
+
+    #[test]
     fn witnessing_size() {
         let qs = QuorumSystem::new_witnessing((0..10).collect());
         assert_eq!(qs.size(), 7); // 4 * (10 / 5) - 1

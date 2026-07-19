@@ -1,3 +1,4 @@
 target
+crates/sims/src/bin/latency_cdf/latency_cdf.csv
 .DS_Store
 Cargo.lock
