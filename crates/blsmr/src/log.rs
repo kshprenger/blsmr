@@ -1,7 +1,8 @@
-use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 
 use client::{CmdId, Command};
 use dscale::services::kv;
+use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::{KEY_AVG_COMMIT_LATENCY, KEY_COMMIT_LATENCIES, KEY_CONFLICT_RATE};
 
@@ -15,24 +16,35 @@ enum Phase {
 struct Entry {
     cmd: Option<Command>,
     submitted_at: dscale::Jiffies,
-    deps: Vec<CmdId>,
+    deps: Option<Arc<[CmdId]>>,
     phase: Phase,
     executed: bool,
 }
 
+impl Entry {
+    fn deps(&self) -> &[CmdId] {
+        self.deps.as_deref().unwrap_or_default()
+    }
+}
+
 #[derive(Default)]
 pub struct CmdLog {
-    entries: HashMap<CmdId, Entry>,
+    entries: FxHashMap<CmdId, Entry>,
     // CmdId of every command sharing a given key, so `submit` doesn't have to scan the whole log.
-    by_key: HashMap<usize, Vec<CmdId>>,
+    by_key: FxHashMap<usize, Vec<CmdId>>,
     // Commit-phase commands not yet promoted to Stable, so `promote_stable` only rescans
     // candidates instead of the whole (ever-growing) log on every commit.
-    pending_commit: HashSet<CmdId>,
+    pending_commit: FxHashSet<CmdId>,
+    stable: FxHashSet<CmdId>,
+    #[cfg(test)]
     execution_order: Vec<CmdId>,
 }
 
 impl CmdLog {
-    pub fn submit(&mut self, cmd: Command) -> Vec<Command> {
+    pub fn submit(&mut self, cmd: Command) -> Vec<CmdId> {
+        if self.stable.contains(&cmd.id) {
+            return Vec::new();
+        }
         let conflicts = self
             .by_key
             .get(&cmd.key)
@@ -40,38 +52,42 @@ impl CmdLog {
             .flatten()
             .filter_map(|id| self.entries.get(id))
             .filter(|entry| entry.phase != Phase::Stable)
-            .filter_map(|entry| entry.cmd.clone())
+            .filter_map(|entry| entry.cmd.map(|cmd| cmd.id))
             .collect();
 
         let entry = self.entries.entry(cmd.id).or_insert_with(|| Entry {
             cmd: None,
             submitted_at: dscale::now(),
-            deps: Vec::new(),
+            deps: None,
             phase: Phase::Pending,
             executed: false,
         });
         if entry.cmd.is_none() {
-            entry.cmd = Some(cmd.clone());
+            entry.cmd = Some(cmd);
             self.by_key.entry(cmd.key).or_default().push(cmd.id);
         }
 
         conflicts
     }
 
-    pub fn commit(&mut self, cmd_id: CmdId, deps: Vec<CmdId>) {
+    pub fn commit(&mut self, cmd_id: CmdId, deps: Arc<[CmdId]>) {
+        if self.stable.contains(&cmd_id) {
+            return;
+        }
         let entry = self.entries.entry(cmd_id).or_insert_with(|| Entry {
             cmd: None,
             submitted_at: dscale::now(),
-            deps: Vec::new(),
+            deps: None,
             phase: Phase::Pending,
             executed: false,
         });
-        entry.deps = deps;
+        entry.deps = (!deps.is_empty()).then_some(deps);
         entry.phase = Phase::Commit;
         self.pending_commit.insert(cmd_id);
         self.promote_stable();
     }
 
+    #[cfg(test)]
     pub fn executed_order(&self) -> &[CmdId] {
         &self.execution_order
     }
@@ -80,7 +96,7 @@ impl CmdLog {
         let newly_stable: Vec<CmdId> = self
             .pending_commit
             .iter()
-            .filter(|id| self.is_deps_closure_committed(&self.entries[id].deps))
+            .filter(|id| self.is_deps_closure_committed(self.entries[id].deps()))
             .copied()
             .collect();
 
@@ -95,23 +111,24 @@ impl CmdLog {
             if let Some(bucket) = key.and_then(|key| self.by_key.get_mut(&key)) {
                 bucket.retain(|&bucketed| bucketed != id);
             }
-            if let Some(entry) = self.entries.get_mut(&id) {
-                entry.deps = Vec::new();
-                entry.cmd = None;
-            }
+            self.entries.remove(&id);
+            self.stable.insert(id);
         }
     }
 
     fn is_deps_closure_committed(&self, deps: &[CmdId]) -> bool {
         let mut stack: Vec<CmdId> = deps.to_vec();
-        let mut seen = HashSet::new();
+        let mut seen = FxHashSet::default();
         while let Some(id) = stack.pop() {
             if !seen.insert(id) {
                 continue;
             }
+            if self.stable.contains(&id) {
+                continue;
+            }
             match self.entries.get(&id) {
                 Some(entry) if matches!(entry.phase, Phase::Commit | Phase::Stable) => {
-                    stack.extend(entry.deps.iter().copied());
+                    stack.extend(entry.deps().iter().copied());
                 }
                 _ => return false,
             }
@@ -133,6 +150,7 @@ impl CmdLog {
                 if let Some(entry) = self.entries.get_mut(&id) {
                     if !entry.executed {
                         entry.executed = true;
+                        #[cfg(test)]
                         self.execution_order.push(id);
                     }
                 }
@@ -141,14 +159,14 @@ impl CmdLog {
     }
 
     fn collect_pending_closure(&self, root: CmdId) -> Vec<CmdId> {
-        let mut seen = HashSet::new();
+        let mut seen = FxHashSet::default();
         let mut stack = vec![root];
         while let Some(id) = stack.pop() {
             if !seen.insert(id) {
                 continue;
             }
             if let Some(entry) = self.entries.get(&id) {
-                for &dep in &entry.deps {
+                for &dep in entry.deps() {
                     if self.entries.get(&dep).is_some_and(|entry| !entry.executed) {
                         stack.push(dep);
                     }
@@ -162,15 +180,15 @@ impl CmdLog {
 
     fn tarjan_sccs(&self, nodes: &[CmdId]) -> Vec<Vec<CmdId>> {
         struct State {
-            index: HashMap<CmdId, usize>,
-            low_link: HashMap<CmdId, usize>,
-            on_stack: HashSet<CmdId>,
+            index: FxHashMap<CmdId, usize>,
+            low_link: FxHashMap<CmdId, usize>,
+            on_stack: FxHashSet<CmdId>,
             stack: Vec<CmdId>,
             counter: usize,
             sccs: Vec<Vec<CmdId>>,
         }
 
-        fn strongconnect(log: &CmdLog, node_set: &HashSet<CmdId>, v: CmdId, s: &mut State) {
+        fn strongconnect(log: &CmdLog, node_set: &FxHashSet<CmdId>, v: CmdId, s: &mut State) {
             s.index.insert(v, s.counter);
             s.low_link.insert(v, s.counter);
             s.counter += 1;
@@ -178,7 +196,7 @@ impl CmdLog {
             s.on_stack.insert(v);
 
             if let Some(entry) = log.entries.get(&v) {
-                for &w in &entry.deps {
+                for &w in entry.deps() {
                     if !node_set.contains(&w) {
                         continue;
                     }
@@ -207,11 +225,11 @@ impl CmdLog {
             }
         }
 
-        let node_set: HashSet<CmdId> = nodes.iter().copied().collect();
+        let node_set: FxHashSet<CmdId> = nodes.iter().copied().collect();
         let mut state = State {
-            index: HashMap::new(),
-            low_link: HashMap::new(),
-            on_stack: HashSet::new(),
+            index: FxHashMap::default(),
+            low_link: FxHashMap::default(),
+            on_stack: FxHashSet::default(),
             stack: Vec::new(),
             counter: 0,
             sccs: Vec::new(),
@@ -280,7 +298,7 @@ mod tests {
             Entry {
                 cmd: None,
                 submitted_at: dscale::Jiffies(0),
-                deps,
+                deps: (!deps.is_empty()).then(|| deps.into()),
                 phase: Phase::Commit,
                 executed: false,
             },
@@ -353,5 +371,15 @@ mod tests {
         log.try_execute(id(1));
 
         assert_eq!(log.executed_order(), &[id(1)]);
+    }
+
+    #[test]
+    fn stable_tombstone_satisfies_dependencies_without_retaining_entry() {
+        let mut log = CmdLog::default();
+        log.stable.insert(id(1));
+        insert_committed(&mut log, id(2), vec![id(1)]);
+
+        assert!(log.is_deps_closure_committed(&[id(2)]));
+        assert!(!log.entries.contains_key(&id(1)));
     }
 }

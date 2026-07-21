@@ -15,7 +15,7 @@ use hotstuff::{
     B0, ChainedHotstuff, KEY_LATENCIES as HOTSTUFF_LATENCIES, Node, NonRotatingHotstuff,
 };
 
-const TIME_BUDGET: Jiffies = Jiffies(200_000);
+const TIME_BUDGET: Jiffies = Jiffies(2_000_000);
 const UNIFORM_LATENCY: Jiffies = Jiffies(100);
 const SEED: u64 = 42;
 const WINTERMUTE_SUBMIT_INTERVAL: Jiffies = Jiffies(10);

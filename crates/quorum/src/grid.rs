@@ -33,6 +33,10 @@ impl QuorumSystem {
     pub(super) fn size(&self) -> usize {
         self.x * self.flatten_grid.len().isqrt()
     }
+    pub(super) fn consensus_committee_size(&self) -> usize {
+        let f = ((self.n - 2) / 3).max(1);
+        (3 * f + 1).min(self.flatten_grid.len())
+    }
 
     pub(super) fn choose_random_quorum(&mut self, rng: &mut impl Rng) -> &[dscale::Pid] {
         self.quorum_buffer.clear();
@@ -86,6 +90,13 @@ mod tests {
         assert_eq!(qs.n, 5);
         assert_eq!(qs.x, 2);
         assert_eq!(qs.size(), 10); // x * sqrt(len) = 2 * 5
+    }
+
+    #[test]
+    fn consensus_committee_size_for_8x8_grid() {
+        let qs = QuorumSystem::new((0..64).collect());
+
+        assert_eq!(qs.consensus_committee_size(), 7);
     }
 
     #[test]

@@ -1,4 +1,4 @@
-use std::hint;
+use std::{hint, sync::Arc};
 
 use client::CmdId;
 use dscale::{
@@ -91,14 +91,14 @@ impl BLSMR {
     }
 
     fn handle_pbft_status(&mut self, status: PbftStatus) {
-        if let PbftStatus::Decided(cmd_id, deps) = status {
-            if cmd_id.pid == dscale::pid() {
+        if let PbftStatus::Decided(cmd_id, deps, leader) = status {
+            if leader == dscale::pid() {
                 self.decide(cmd_id, deps);
             }
         }
     }
 
-    fn decide(&mut self, cmd_id: CmdId, deps: Vec<CmdId>) {
+    fn decide(&mut self, cmd_id: CmdId, deps: Arc<[CmdId]>) {
         dscale::broadcast_within_pool(POOL_BLSMR, Announce::Commit(Commit { cmd_id, deps }));
     }
 }

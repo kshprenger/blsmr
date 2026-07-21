@@ -9,7 +9,7 @@ dscale = {git = "https://codeberg.org/kshprenger/dscale.git", branch = "master"}
 
 [profile.release]
 lto = "fat"           # Link Time Optimization: enables cross-crate optimizations
-codegen-units = 1     # Reduces parallelism in code generation for better optimization
+codegen-units = 1     # Reduces parallelism
 panic = "abort"       # Removes stack unwinding code, slightly smaller and faster binary
 opt-level = 3         # Maximum optimization
 debug = true          # Pretty flamegraph without losing performance

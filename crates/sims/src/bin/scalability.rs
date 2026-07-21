@@ -22,10 +22,12 @@ use hotstuff::{B0, ChainedHotstuff, KEY_LATENCIES as HOTSTUFF_LATENCIES, Node};
 
 const NODE_COUNTS: [usize; 11] = [2, 4, 8, 16, 32, 64, 128, 256, 512, 1_024, 2_048];
 const THREE_JANE_NODE_COUNTS: [usize; 10] = [4, 9, 16, 36, 64, 121, 256, 529, 1_024, 2_025];
-const TIME_BUDGET: Jiffies = Jiffies(1_000);
+const TIME_BUDGET: Jiffies = Jiffies(50_000);
+const WINTERMUTE_TIME_BUDGET: Jiffies = Jiffies(5_000);
 const NETWORK_LATENCY: Jiffies = Jiffies(100);
-const SUBMIT_INTERVAL: Jiffies = Jiffies(1_000);
-static MESSAGE_COUNT: AtomicUsize = AtomicUsize::new(0);
+const SUBMIT_INTERVAL: Jiffies = Jiffies(2_000);
+const MAX_NODES: usize = 2_048;
+static MESSAGE_COUNTS: [AtomicUsize; MAX_NODES] = [const { AtomicUsize::new(0) }; MAX_NODES];
 
 struct Measured<P>(P);
 
@@ -41,7 +43,7 @@ impl<P: Process> Process for Measured<P> {
     }
 
     fn on_message(&mut self, from: Pid, message: MessagePtr) {
-        MESSAGE_COUNT.fetch_add(1, Ordering::Relaxed);
+        MESSAGE_COUNTS[dscale::pid()].fetch_add(1, Ordering::Relaxed);
         self.0.on_message(from, message);
     }
 
@@ -96,6 +98,7 @@ fn configs() -> Vec<Config> {
 
 fn simulation<P: Process + Default + Send + 'static>(
     nodes: usize,
+    time_budget: Jiffies,
 ) -> Box<dyn dscale::SimulationRunner> {
     SimulationBuilder::new()
         .add_pool::<Measured<P>>("scalability", nodes)
@@ -107,20 +110,46 @@ fn simulation<P: Process + Default + Send + 'static>(
                 high: NETWORK_LATENCY,
             },
         )
-        .time_budget(TIME_BUDGET)
+        .time_budget(time_budget)
         .seed(42)
         .seq_sched()
         .build()
 }
 
-fn measure(mut simulation: Box<dyn dscale::SimulationRunner>, nodes: usize) -> f64 {
-    MESSAGE_COUNT.store(0, Ordering::Relaxed);
+fn measure(
+    mut simulation: Box<dyn dscale::SimulationRunner>,
+    nodes: usize,
+    committed: impl FnOnce() -> usize,
+) -> (f64, f64) {
+    for count in &MESSAGE_COUNTS[..nodes] {
+        count.store(0, Ordering::Relaxed);
+    }
     simulation.run_full_budget();
-    MESSAGE_COUNT.load(Ordering::Relaxed) as f64 / (TIME_BUDGET.0 * nodes) as f64
+    load_stats(
+        &MESSAGE_COUNTS[..nodes]
+            .iter()
+            .map(|count| count.load(Ordering::Relaxed))
+            .collect::<Vec<_>>(),
+        committed(),
+    )
 }
 
-fn run_hotstuff(nodes: usize) -> f64 {
-    let simulation = simulation::<ChainedHotstuff>(nodes);
+fn load_stats(calls: &[usize], committed: usize) -> (f64, f64) {
+    if committed == 0 || calls.is_empty() {
+        return (0.0, 0.0);
+    }
+    let mean = calls.iter().sum::<usize>() as f64 / committed as f64;
+    let scale = calls.len() as f64 / committed as f64;
+    let variance = calls
+        .iter()
+        .map(|calls| (*calls as f64 * scale - mean).powi(2))
+        .sum::<f64>()
+        / calls.len() as f64;
+    (mean, variance.sqrt())
+}
+
+fn run_hotstuff(nodes: usize) -> (f64, f64) {
+    let simulation = simulation::<ChainedHotstuff>(nodes, TIME_BUDGET);
     kv::set(
         B0,
         Arc::new(Node {
@@ -130,17 +159,25 @@ fn run_hotstuff(nodes: usize) -> f64 {
         }),
     );
     kv::set::<Vec<Jiffies>>(HOTSTUFF_LATENCIES, Vec::new());
-    measure(simulation, nodes)
+    measure(simulation, nodes, || {
+        kv::get::<Vec<Jiffies>>(HOTSTUFF_LATENCIES).len()
+    })
 }
 
-fn run_bullshark(nodes: usize) -> f64 {
-    let simulation = simulation::<Bullshark>(nodes);
+fn run_bullshark(nodes: usize) -> (f64, f64) {
+    let simulation = simulation::<Bullshark>(nodes, TIME_BUDGET);
     kv::set::<Vec<Jiffies>>(BULLSHARK_LATENCIES, Vec::new());
-    measure(simulation, nodes)
+    measure(simulation, nodes, || {
+        kv::get::<Vec<Jiffies>>(BULLSHARK_LATENCIES).len()
+    })
 }
 
-fn run_blsmr(nodes: usize, protocol: BLSMRProtocol) -> f64 {
-    let simulation = simulation::<BLSMR>(nodes);
+fn run_blsmr(nodes: usize, protocol: BLSMRProtocol) -> (f64, f64) {
+    let time_budget = match &protocol {
+        BLSMRProtocol::Wintermute => WINTERMUTE_TIME_BUDGET,
+        _ => TIME_BUDGET,
+    };
+    let simulation = simulation::<BLSMR>(nodes, time_budget);
     let pids = dscale::list_pool(POOL_BLSMR);
     let quorum_system = match &protocol {
         BLSMRProtocol::ThreeJane => quorum::QuorumSystem::new_witnessing_grid(pids),
@@ -154,17 +191,19 @@ fn run_blsmr(nodes: usize, protocol: BLSMRProtocol) -> f64 {
     kv::set::<(usize, usize)>(KEY_AVG_COMMIT_LATENCY, (0, 0));
     kv::set::<Vec<Jiffies>>(KEY_COMMIT_LATENCIES, Vec::new());
     kv::set::<(usize, usize)>(KEY_CONFLICT_RATE, (0, 0));
-    measure(simulation, nodes)
+    measure(simulation, nodes, || {
+        kv::get::<(usize, usize)>(KEY_AVG_COMMIT_LATENCY).1
+    })
 }
 
-fn run(config: Config) -> (Config, f64) {
-    let load = match config.protocol {
+fn run(config: Config) -> (Config, f64, f64) {
+    let (load, standard_deviation) = match config.protocol {
         Protocol::Bullshark => run_bullshark(config.nodes),
         Protocol::ThreeJane => run_blsmr(config.nodes, BLSMRProtocol::ThreeJane),
         Protocol::Wintermute => run_blsmr(config.nodes, BLSMRProtocol::Wintermute),
         Protocol::Hotstuff => run_hotstuff(config.nodes),
     };
-    (config, load)
+    (config, load, standard_deviation)
 }
 
 fn output_path() -> PathBuf {
@@ -177,17 +216,32 @@ fn main() {
     let mut file = File::create(&path).expect("failed to create results file");
     writeln!(
         file,
-        "protocol,nodes,avg_on_message_calls_per_replica_per_jiffy"
+        "protocol,nodes,on_message_calls_per_committed_unit,standard_deviation"
     )
     .expect("failed to write header");
-    for (config, load) in results {
+    for (config, load, standard_deviation) in results {
         writeln!(
             file,
-            "{},{},{load:.6}",
+            "{},{},{load:.6},{standard_deviation:.6}",
             config.protocol.name(),
             config.nodes
         )
         .expect("failed to write row");
     }
     println!("wrote {}", path.display());
+}
+
+#[cfg(test)]
+mod tests {
+    use super::load_stats;
+
+    #[test]
+    fn zero_commits_has_zero_load() {
+        assert_eq!(load_stats(&[10, 20], 0), (0.0, 0.0));
+    }
+
+    #[test]
+    fn load_stats_measure_per_replica_dispersion() {
+        assert_eq!(load_stats(&[10, 20, 30], 30), (2.0, 0.816496580927726));
+    }
 }

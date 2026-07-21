@@ -1,12 +1,12 @@
-use std::collections::HashSet;
+use std::sync::Arc;
 
-use client::{CmdId, Command};
+use client::CmdId;
 use dscale::{
     Jiffies, dscale_debug,
     rand::{SeedableRng, rngs::SmallRng},
     services::kv::{self},
 };
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::{
     BLSMRProtocol, KEY_ANNOUNCE_TIMEOUT, KEY_PROTOCOL_TYPE, KEY_QUORUM_SYSTEM, POOL_BLSMR,
@@ -37,14 +37,15 @@ pub struct Req {
 
 #[derive(Debug, Clone)]
 pub struct Res {
+    pub pid: dscale::Pid,
     pub id: client::CmdId,
-    pub conflicts: Vec<Command>,
+    pub conflicts: Vec<CmdId>,
 }
 
 #[derive(Debug)]
 pub struct Commit {
     pub cmd_id: CmdId,
-    pub deps: Vec<CmdId>,
+    pub deps: Arc<[CmdId]>,
 }
 
 impl dscale::Message for Announce {}
@@ -90,7 +91,12 @@ impl DDS {
             }
             _ => {}
         }
-        self.pending_announce_quorums.insert(cmd.id, Vec::new());
+        let capacity = match self.protocol_type {
+            BLSMRProtocol::Wintermute => self.peer_number,
+            _ => self.bqs.size(),
+        };
+        self.pending_announce_quorums
+            .insert(cmd.id, Vec::with_capacity(capacity));
     }
 
     fn send_announce(&mut self, cmd: client::Command) {
@@ -109,14 +115,15 @@ impl DDS {
                 dscale::send(
                     from,
                     Announce::Res(Res {
+                        pid: dscale::pid(),
                         id: req.cmd.id,
-                        conflicts: self.log.submit(req.cmd.clone()),
+                        conflicts: self.log.submit(req.cmd),
                     }),
                 );
                 AnnounceStatus::DoNothing
             }
             Announce::Commit(commit) => {
-                self.log.commit(commit.cmd_id, commit.deps.clone());
+                self.log.commit(commit.cmd_id, Arc::clone(&commit.deps));
                 AnnounceStatus::DoNothing
             }
             Announce::Res(res) => {
@@ -127,7 +134,7 @@ impl DDS {
                         quorum.push(res.clone());
                         let ready = match self.protocol_type {
                             BLSMRProtocol::Wintermute => quorum.len() == self.peer_number,
-                            _ => self.bqs.is_quorum(quorum.iter().map(|res| res.id.pid)),
+                            _ => self.bqs.is_quorum(quorum.iter().map(|res| res.pid)),
                         };
                         if ready {
                             let quorum = self
@@ -179,7 +186,7 @@ impl DDS {
         }
     }
     pub(super) fn is_quorum(&self, res: &Vec<Res>) -> bool {
-        self.bqs.is_quorum(res.iter().map(|res| res.id.pid))
+        self.bqs.is_quorum(res.iter().map(|res| res.pid))
     }
 
     fn allow_fastpath(&self, quorum: &[Res]) -> bool {
@@ -187,22 +194,22 @@ impl DDS {
             return false;
         }
         let first = &quorum[0].conflicts;
-        let first_ids: HashSet<CmdId> = first.iter().map(|cmd| cmd.id).collect();
+        let first_ids: FxHashSet<CmdId> = first.iter().copied().collect();
         quorum[1..].iter().all(|res| {
             res.conflicts.len() == first.len()
-                && res.conflicts.iter().all(|cmd| first_ids.contains(&cmd.id))
+                && res.conflicts.iter().all(|cmd| first_ids.contains(cmd))
         })
     }
 }
 
-pub(super) fn union_deps(quorum: &[Res]) -> Vec<CmdId> {
+pub(super) fn union_deps(quorum: &[Res]) -> Arc<[CmdId]> {
     let mut deps: Vec<CmdId> = quorum
         .iter()
-        .flat_map(|res| res.conflicts.iter().map(|cmd| cmd.id))
+        .flat_map(|res| res.conflicts.iter().copied())
         .collect();
-    deps.sort();
+    deps.sort_unstable();
     deps.dedup();
-    deps
+    deps.into()
 }
 
 #[cfg(test)]
@@ -224,13 +231,11 @@ mod tests {
 
     fn res_with_conflicts(pid: dscale::Pid, conflict_ids: &[usize]) -> Res {
         Res {
-            id: CmdId { pid, id: 0 },
+            pid,
+            id: CmdId { pid: 0, id: 0 },
             conflicts: conflict_ids
                 .iter()
-                .map(|&id| Command {
-                    id: CmdId { pid: 0, id },
-                    key: 0,
-                })
+                .map(|&id| CmdId { pid: 0, id })
                 .collect(),
         }
     }
@@ -245,6 +250,18 @@ mod tests {
         ];
 
         assert!(dds.allow_fastpath(&quorum));
+    }
+
+    #[test]
+    fn quorum_uses_responder_pids() {
+        let dds = make_dds(3);
+        let quorum = vec![
+            res_with_conflicts(0, &[]),
+            res_with_conflicts(1, &[]),
+            res_with_conflicts(2, &[]),
+        ];
+
+        assert!(dds.is_quorum(&quorum));
     }
 
     #[test]

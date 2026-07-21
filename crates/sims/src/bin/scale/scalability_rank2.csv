@@ -1,0 +1,2 @@
+protocol,nodes,on_message_calls_per_committed_unit,standard_deviation
+HotStuff,2,2.022267,0.002024

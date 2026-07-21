@@ -45,6 +45,12 @@ impl QuorumSystem {
             Flavor::WitnessGrid(qs) => qs.size(),
         }
     }
+    pub fn consensus_committee_size(&self) -> usize {
+        match &self.flavor {
+            Flavor::Threshold(qs) => qs.size(),
+            Flavor::WitnessGrid(qs) => qs.consensus_committee_size(),
+        }
+    }
     pub fn is_quorum(&self, pids: impl Iterator<Item = dscale::Pid> + Clone) -> bool {
         match &self.flavor {
             Flavor::Threshold(qs) => qs.is_quorum(pids),

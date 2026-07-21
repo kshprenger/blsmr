@@ -1,0 +1,157 @@
+use std::{fs::File, io::Write, path::PathBuf};
+
+use blsmr::{
+    BLSMRProtocol, KEY_ANNOUNCE_TIMEOUT, KEY_AVG_COMMIT_LATENCY, KEY_COMMIT_LATENCIES,
+    KEY_CONFLICT_RATE, KEY_KEY_COUNT, KEY_PROTOCOL_TYPE, KEY_QUORUM_SYSTEM, KEY_SUBMIT_INTERVAL,
+    POOL_BLSMR, log, process::BLSMR,
+};
+use dscale::{
+    BandwidthConfig, Distr, Jiffies, SimulationBuilder, mpi,
+    rand::{SeedableRng, rngs::SmallRng, seq::SliceRandom},
+    services::kv,
+};
+
+const REPLICAS: usize = 6;
+const TIME_BUDGET: Jiffies = Jiffies(2_000_000);
+const KEY_COUNT: usize = 32;
+const ANNOUNCE_TIMEOUT: Jiffies = Jiffies(500);
+const SEED: u64 = 42;
+const EARTH_RADIUS_KM: f64 = 6_371.0;
+const LIGHT_SPEED_KM_PER_SECOND: f64 = 299_792.458;
+
+#[derive(Clone, Copy)]
+struct Params {
+    submit_interval: Jiffies,
+}
+
+struct Region {
+    name: String,
+    latitude: f64,
+    longitude: f64,
+}
+
+fn sweep() -> Vec<Params> {
+    [5, 10, 20, 50, 100, 200, 500, 1_000, 2_000, 5_000, 10_000]
+        .into_iter()
+        .map(|submit_interval| Params {
+            submit_interval: Jiffies(submit_interval),
+        })
+        .collect()
+}
+
+fn regions() -> Vec<Region> {
+    let mut regions = include_str!("latency_cdf/aws_regions.csv")
+        .lines()
+        .skip(1)
+        .map(|line| {
+            let mut fields = line.split(',');
+            Region {
+                name: fields.next().expect("missing AWS Region ID").to_owned(),
+                latitude: fields
+                    .next()
+                    .expect("missing latitude")
+                    .parse()
+                    .expect("invalid latitude"),
+                longitude: fields
+                    .next()
+                    .expect("missing longitude")
+                    .parse()
+                    .expect("invalid longitude"),
+            }
+        })
+        .collect::<Vec<_>>();
+    regions.shuffle(&mut SmallRng::seed_from_u64(SEED));
+    regions.truncate(REPLICAS);
+    regions
+}
+
+fn fixed_latency(latency: Jiffies) -> Distr {
+    Distr::Uniform {
+        low: latency,
+        high: latency,
+    }
+}
+
+fn light_latency(from: &Region, to: &Region) -> Jiffies {
+    let latitude_delta = (to.latitude - from.latitude).to_radians();
+    let longitude_delta = (to.longitude - from.longitude).to_radians();
+    let from_latitude = from.latitude.to_radians();
+    let to_latitude = to.latitude.to_radians();
+    let half_chord = (latitude_delta / 2.0).sin().powi(2)
+        + from_latitude.cos() * to_latitude.cos() * (longitude_delta / 2.0).sin().powi(2);
+    let distance_km = EARTH_RADIUS_KM * 2.0 * half_chord.sqrt().asin();
+    Jiffies((distance_km / LIGHT_SPEED_KM_PER_SECOND * 1_000.0).ceil() as usize)
+}
+
+fn simulation() -> Box<dyn dscale::SimulationRunner> {
+    let regions = regions();
+    let mut builder = SimulationBuilder::new()
+        .default_bandwidth(BandwidthConfig::Unbounded)
+        .time_budget(TIME_BUDGET)
+        .seed(SEED)
+        .seq_sched();
+    for region in &regions {
+        builder = builder.add_pool::<BLSMR>(&region.name, 1);
+    }
+    for region in &regions {
+        builder = builder.within_pool_latency(&region.name, fixed_latency(Jiffies(0)));
+    }
+    for (index, from) in regions.iter().enumerate() {
+        for to in &regions[index + 1..] {
+            builder = builder.between_pool_latency(
+                &from.name,
+                &to.name,
+                fixed_latency(light_latency(from, to)),
+            );
+        }
+    }
+    builder.build()
+}
+
+fn run_once(params: Params) -> (Params, f64, f64) {
+    let mut simulation = simulation();
+    kv::set(KEY_PROTOCOL_TYPE, BLSMRProtocol::Wintermute);
+    kv::set(KEY_SUBMIT_INTERVAL, params.submit_interval);
+    kv::set(KEY_ANNOUNCE_TIMEOUT, ANNOUNCE_TIMEOUT);
+    kv::set(KEY_KEY_COUNT, KEY_COUNT);
+    kv::set(
+        KEY_QUORUM_SYSTEM,
+        quorum::QuorumSystem::new_dissemination(dscale::list_pool(POOL_BLSMR)),
+    );
+    kv::set::<(usize, usize)>(KEY_AVG_COMMIT_LATENCY, (0, 0));
+    kv::set::<Vec<Jiffies>>(KEY_COMMIT_LATENCIES, Vec::new());
+    kv::set::<(usize, usize)>(KEY_CONFLICT_RATE, (0, 0));
+    simulation.run_full_budget();
+    (
+        params,
+        log::conflict_rate_percentage(),
+        log::average_commit_latency(),
+    )
+}
+
+fn output_path() -> PathBuf {
+    PathBuf::from(format!(
+        "terrestrial_conflict_latency_rank{}.csv",
+        mpi::rank()
+    ))
+}
+
+fn main() {
+    let results = mpi::distribute(sweep(), run_once);
+    let path = output_path();
+    let mut file = File::create(&path).expect("failed to create results file");
+    writeln!(
+        file,
+        "key_count,submit_interval,announce_timeout,conflict_rate_pct,avg_latency_jiffies"
+    )
+    .expect("failed to write header");
+    for (params, conflict_rate, latency) in &results {
+        writeln!(
+            file,
+            "{KEY_COUNT},{},{},{conflict_rate:.4},{latency:.4}",
+            params.submit_interval.0, ANNOUNCE_TIMEOUT.0
+        )
+        .expect("failed to write row");
+    }
+    println!("wrote {} rows to {}", results.len(), path.display());
+}

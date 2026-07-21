@@ -6,7 +6,7 @@ pub struct CmdId {
     pub id: usize,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub struct Command {
     pub id: CmdId,  // unique id
     pub key: usize, // conflicts

@@ -16,7 +16,7 @@ COLORS = {
 
 
 def main():
-    pattern = sys.argv[1] if len(sys.argv) > 1 else str(Path(__file__).parent / "scalability" / "scalability_rank*.csv")
+    pattern = sys.argv[1] if len(sys.argv) > 1 else str(Path(__file__).parent / "scale" / "scalability_rank*.csv")
     rows = []
     for path in glob.glob(pattern):
         with open(path, newline="") as f:
@@ -29,17 +29,30 @@ def main():
         points = sorted(
             (
                 int(row["nodes"]),
-                float(row["avg_on_message_calls_per_replica_per_jiffy"]),
+                float(row["on_message_calls_per_committed_unit"]),
+                float(row.get("standard_deviation", 0)),
             )
             for row in rows
             if row["protocol"] == protocol
         )
-        ax.plot(*zip(*points), label=protocol, color=color, linewidth=2, marker="o")
+        nodes, loads, deviations = zip(*points)
+        ax.errorbar(
+            nodes,
+            loads,
+            yerr=deviations,
+            label=protocol,
+            color=color,
+            linewidth=2,
+            marker="o",
+            capsize=3,
+        )
 
-    ax.set_title("Protocol message-processing load")
+    ax.set_title("Protocol message-processing cost")
     ax.set_xlabel("nodes")
-    ax.set_ylabel("average on_message calls per replica per jiffy")
+    ax.set_ylabel("on_message calls per committed unit")
     ax.set_xscale("log", base=2)
+    ax.set_yscale("symlog", linthresh=1)
+    ax.set_ylim(bottom=0)
     ax.set_xticks([2**power for power in range(1, 12)])
     ax.get_xaxis().set_major_formatter(plt.ScalarFormatter())
     ax.grid(True, color="#e1e0d9", linewidth=0.8)
