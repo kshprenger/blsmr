@@ -1,2 +1,2 @@
 protocol,nodes,on_message_calls_per_committed_unit,standard_deviation
-3Jane,4,11.501908,0.038311
+3Jane,4,11.505725,0.035957

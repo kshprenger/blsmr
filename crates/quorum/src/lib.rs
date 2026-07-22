@@ -30,6 +30,11 @@ impl QuorumSystem {
             flavor: Flavor::WitnessGrid(grid::QuorumSystem::new(pids)),
         }
     }
+    pub fn new_witnessing_grid_with_faults(pids: Vec<dscale::Pid>, faults: usize) -> Self {
+        Self {
+            flavor: Flavor::WitnessGrid(grid::QuorumSystem::with_faults(pids, faults)),
+        }
+    }
 }
 
 impl QuorumSystem {

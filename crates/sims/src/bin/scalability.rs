@@ -26,6 +26,7 @@ const TIME_BUDGET: Jiffies = Jiffies(50_000);
 const WINTERMUTE_TIME_BUDGET: Jiffies = Jiffies(5_000);
 const NETWORK_LATENCY: Jiffies = Jiffies(100);
 const SUBMIT_INTERVAL: Jiffies = Jiffies(2_000);
+const THREE_JANE_FAULTS: usize = 1;
 const MAX_NODES: usize = 2_048;
 static MESSAGE_COUNTS: [AtomicUsize; MAX_NODES] = [const { AtomicUsize::new(0) }; MAX_NODES];
 
@@ -112,7 +113,7 @@ fn simulation<P: Process + Default + Send + 'static>(
         )
         .time_budget(time_budget)
         .seed(42)
-        .seq_sched()
+        .par_sched(dscale::ThreadNumber::MatchCores)
         .build()
 }
 
@@ -171,7 +172,6 @@ fn run_bullshark(nodes: usize) -> (f64, f64) {
         kv::get::<Vec<Jiffies>>(BULLSHARK_LATENCIES).len()
     })
 }
-
 fn run_blsmr(nodes: usize, protocol: BLSMRProtocol) -> (f64, f64) {
     let time_budget = match &protocol {
         BLSMRProtocol::Wintermute => WINTERMUTE_TIME_BUDGET,
@@ -180,7 +180,9 @@ fn run_blsmr(nodes: usize, protocol: BLSMRProtocol) -> (f64, f64) {
     let simulation = simulation::<BLSMR>(nodes, time_budget);
     let pids = dscale::list_pool(POOL_BLSMR);
     let quorum_system = match &protocol {
-        BLSMRProtocol::ThreeJane => quorum::QuorumSystem::new_witnessing_grid(pids),
+        BLSMRProtocol::ThreeJane => {
+            quorum::QuorumSystem::new_witnessing_grid_with_faults(pids, THREE_JANE_FAULTS)
+        }
         _ => quorum::QuorumSystem::new_dissemination(pids),
     };
     kv::set(KEY_PROTOCOL_TYPE, protocol);

@@ -1,2 +1,2 @@
 protocol,nodes,on_message_calls_per_committed_unit,standard_deviation
-Wintermute,256,8.441921,0.186430
+Wintermute,256,6.052784,0.181050

@@ -7,10 +7,17 @@ pub struct QuorumSystem {
     quorum_buffer: Vec<dscale::Pid>,
     x: usize, // how many rows and columns to take
     indices: Vec<usize>,
+    consensus_committee_size: usize,
 }
 
 impl QuorumSystem {
     pub(super) fn new(pids: Vec<dscale::Pid>) -> Self {
+        let n = pids.len().isqrt();
+        let faults = ((n - 2) / 3).max(1);
+        Self::with_faults(pids, faults)
+    }
+
+    pub(super) fn with_faults(pids: Vec<dscale::Pid>, faults: usize) -> Self {
         let size = pids.len();
         let n = size.isqrt();
         assert_eq!(n * n, size);
@@ -22,6 +29,7 @@ impl QuorumSystem {
             quorum_buffer: Vec::with_capacity(2 * x * n),
             x,
             indices: (0..n).collect(),
+            consensus_committee_size: (3 * faults + 1).min(size),
         }
     }
 }
@@ -34,8 +42,7 @@ impl QuorumSystem {
         self.x * self.flatten_grid.len().isqrt()
     }
     pub(super) fn consensus_committee_size(&self) -> usize {
-        let f = ((self.n - 2) / 3).max(1);
-        (3 * f + 1).min(self.flatten_grid.len())
+        self.consensus_committee_size
     }
 
     pub(super) fn choose_random_quorum(&mut self, rng: &mut impl Rng) -> &[dscale::Pid] {
@@ -97,6 +104,13 @@ mod tests {
         let qs = QuorumSystem::new((0..64).collect());
 
         assert_eq!(qs.consensus_committee_size(), 7);
+    }
+
+    #[test]
+    fn consensus_committee_uses_fixed_fault_count() {
+        let qs = QuorumSystem::with_faults((0..64).collect(), 1);
+
+        assert_eq!(qs.consensus_committee_size(), 4);
     }
 
     #[test]
