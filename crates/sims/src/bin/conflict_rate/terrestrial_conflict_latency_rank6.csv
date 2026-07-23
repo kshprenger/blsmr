@@ -1,2 +1,2 @@
-key_count,submit_interval,announce_timeout,conflict_rate_pct,avg_latency_jiffies
-32,500,500,4.5581,93.3133
+key_count,submit_interval,announce_timeout,seed,conflict_rate_pct,avg_latency_jiffies
+32,10,500,43,86.0208,208.3674

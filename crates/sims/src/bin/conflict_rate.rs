@@ -15,13 +15,14 @@ const REPLICAS: usize = 6;
 const TIME_BUDGET: Jiffies = Jiffies(2_000_000);
 const KEY_COUNT: usize = 32;
 const ANNOUNCE_TIMEOUT: Jiffies = Jiffies(500);
-const SEED: u64 = 42;
+const SEEDS: [u64; 5] = [42, 43, 44, 45, 46];
 const EARTH_RADIUS_KM: f64 = 6_371.0;
 const LIGHT_SPEED_KM_PER_SECOND: f64 = 299_792.458;
 
 #[derive(Clone, Copy)]
 struct Params {
     submit_interval: Jiffies,
+    seed: u64,
 }
 
 struct Region {
@@ -33,13 +34,16 @@ struct Region {
 fn sweep() -> Vec<Params> {
     [5, 10, 20, 50, 100, 200, 500, 1_000, 2_000, 5_000, 10_000]
         .into_iter()
-        .map(|submit_interval| Params {
-            submit_interval: Jiffies(submit_interval),
+        .flat_map(|submit_interval| {
+            SEEDS.into_iter().map(move |seed| Params {
+                submit_interval: Jiffies(submit_interval),
+                seed,
+            })
         })
         .collect()
 }
 
-fn regions() -> Vec<Region> {
+fn regions(seed: u64) -> Vec<Region> {
     let mut regions = include_str!("latency_cdf/aws_regions.csv")
         .lines()
         .skip(1)
@@ -60,7 +64,7 @@ fn regions() -> Vec<Region> {
             }
         })
         .collect::<Vec<_>>();
-    regions.shuffle(&mut SmallRng::seed_from_u64(SEED));
+    regions.shuffle(&mut SmallRng::seed_from_u64(seed));
     regions.truncate(REPLICAS);
     regions
 }
@@ -83,13 +87,13 @@ fn light_latency(from: &Region, to: &Region) -> Jiffies {
     Jiffies((distance_km / LIGHT_SPEED_KM_PER_SECOND * 1_000.0).ceil() as usize)
 }
 
-fn simulation() -> Box<dyn dscale::SimulationRunner> {
-    let regions = regions();
+fn simulation(seed: u64) -> Box<dyn dscale::SimulationRunner> {
+    let regions = regions(seed);
     let mut builder = SimulationBuilder::new()
         .default_bandwidth(BandwidthConfig::Unbounded)
         .time_budget(TIME_BUDGET)
-        .seed(SEED)
-        .seq_sched();
+        .seed(seed)
+        .par_sched(dscale::ThreadNumber::MatchCores);
     for region in &regions {
         builder = builder.add_pool::<BLSMR>(&region.name, 1);
     }
@@ -109,7 +113,7 @@ fn simulation() -> Box<dyn dscale::SimulationRunner> {
 }
 
 fn run_once(params: Params) -> (Params, f64, f64) {
-    let mut simulation = simulation();
+    let mut simulation = simulation(params.seed);
     kv::set(KEY_PROTOCOL_TYPE, BLSMRProtocol::Wintermute);
     kv::set(KEY_SUBMIT_INTERVAL, params.submit_interval);
     kv::set(KEY_ANNOUNCE_TIMEOUT, ANNOUNCE_TIMEOUT);
@@ -142,14 +146,14 @@ fn main() {
     let mut file = File::create(&path).expect("failed to create results file");
     writeln!(
         file,
-        "key_count,submit_interval,announce_timeout,conflict_rate_pct,avg_latency_jiffies"
+        "key_count,submit_interval,announce_timeout,seed,conflict_rate_pct,avg_latency_jiffies"
     )
     .expect("failed to write header");
     for (params, conflict_rate, latency) in &results {
         writeln!(
             file,
-            "{KEY_COUNT},{},{},{conflict_rate:.4},{latency:.4}",
-            params.submit_interval.0, ANNOUNCE_TIMEOUT.0
+            "{KEY_COUNT},{},{},{},{conflict_rate:.4},{latency:.4}",
+            params.submit_interval.0, ANNOUNCE_TIMEOUT.0, params.seed
         )
         .expect("failed to write row");
     }
