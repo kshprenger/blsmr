@@ -41,6 +41,20 @@ pub struct CmdLog {
 }
 
 impl CmdLog {
+    pub fn record_creation(&mut self, cmd_id: CmdId) {
+        self.record_creation_at(cmd_id, dscale::now());
+    }
+
+    fn record_creation_at(&mut self, cmd_id: CmdId, submitted_at: dscale::Jiffies) {
+        self.entries.entry(cmd_id).or_insert_with(|| Entry {
+            cmd: None,
+            submitted_at,
+            deps: None,
+            phase: Phase::Pending,
+            executed: false,
+        });
+    }
+
     pub fn submit(&mut self, cmd: Command) -> Vec<CmdId> {
         if self.stable.contains(&cmd.id) {
             return Vec::new();
@@ -381,5 +395,15 @@ mod tests {
 
         assert!(log.is_deps_closure_committed(&[id(2)]));
         assert!(!log.entries.contains_key(&id(1)));
+    }
+
+    #[test]
+    fn submission_preserves_local_creation_time() {
+        let mut log = CmdLog::default();
+        log.record_creation_at(id(1), dscale::Jiffies(7));
+
+        log.submit(Command { id: id(1), key: 3 });
+
+        assert_eq!(log.entries[&id(1)].submitted_at, dscale::Jiffies(7));
     }
 }

@@ -78,6 +78,7 @@ impl Default for DDS {
 
 impl DDS {
     pub(super) fn announce(&mut self, cmd: client::Command) {
+        self.log.record_creation(cmd.id);
         self.prepare_announce(&cmd);
         self.send_announce(cmd);
     }

@@ -10,9 +10,10 @@ COLORS = {
     "HotStuff": "#2a78d6",
     "Hotstuff*": "#d99a2b",
     "Bullshark": "#b65331",
+    "3Jane": "#46855c",
     "Wintermute": "#7a5ca8",
 }
-LINESTYLES = {"Hotstuff*": "--"}
+LINESTYLES = {"Hotstuff*": "--", "3Jane": ":"}
 TOPOLOGIES = ("uniform", "terrestrial")
 
 

@@ -172,6 +172,7 @@ fn run_bullshark(nodes: usize) -> (f64, f64) {
         kv::get::<Vec<Jiffies>>(BULLSHARK_LATENCIES).len()
     })
 }
+
 fn run_blsmr(nodes: usize, protocol: BLSMRProtocol) -> (f64, f64) {
     let time_budget = match &protocol {
         BLSMRProtocol::Wintermute => WINTERMUTE_TIME_BUDGET,

@@ -20,6 +20,7 @@ const UNIFORM_LATENCY: Jiffies = Jiffies(100);
 const SEED: u64 = 42;
 const WINTERMUTE_SUBMIT_INTERVAL: Jiffies = Jiffies(10);
 const TERRESTRIAL_WINTERMUTE_SUBMIT_INTERVAL: Jiffies = Jiffies(900);
+const THREE_JANE_FAULTS: usize = 1;
 const EARTH_RADIUS_KM: f64 = 6_371.0;
 const LIGHT_SPEED_KM_PER_SECOND: f64 = 299_792.458;
 
@@ -46,7 +47,7 @@ struct Region {
 }
 
 fn csv_path() -> PathBuf {
-    PathBuf::from("latency_cdf.csv")
+    PathBuf::from("crates/sims/src/bin/latency_cdf/latency_cdf.csv")
 }
 
 fn builder() -> SimulationBuilder {
@@ -174,21 +175,30 @@ fn run_bullshark(topology: NetworkTopology) -> Vec<Jiffies> {
     kv::get(BULLSHARK_LATENCIES)
 }
 
-fn run_wintermute(topology: NetworkTopology) -> (Vec<Jiffies>, f64) {
-    let regions = terrestrial_regions(6);
+fn run_blsmr(
+    topology: NetworkTopology,
+    protocol: BLSMRProtocol,
+    replicas: usize,
+    uniform_pool: &'static str,
+) -> (Vec<Jiffies>, f64) {
+    let regions = terrestrial_regions(replicas);
     let mut simulation = match topology {
-        NetworkTopology::Uniform => uniform_builder::<BLSMR>("wintermute_uniform", 6),
+        NetworkTopology::Uniform => uniform_builder::<BLSMR>(uniform_pool, replicas),
         NetworkTopology::Terrestrial => terrestrial_builder::<BLSMR>(&regions),
     }
     .build();
-    kv::set(KEY_PROTOCOL_TYPE, BLSMRProtocol::Wintermute);
+    let quorum_system = match &protocol {
+        BLSMRProtocol::ThreeJane => quorum::QuorumSystem::new_witnessing_grid_with_faults(
+            dscale::list_pool(POOL_BLSMR),
+            THREE_JANE_FAULTS,
+        ),
+        _ => quorum::QuorumSystem::new_dissemination(dscale::list_pool(POOL_BLSMR)),
+    };
+    kv::set(KEY_PROTOCOL_TYPE, protocol);
     kv::set(KEY_SUBMIT_INTERVAL, wintermute_submit_interval(topology));
     kv::set(KEY_ANNOUNCE_TIMEOUT, Jiffies(500));
     kv::set(KEY_KEY_COUNT, 32usize);
-    kv::set(
-        KEY_QUORUM_SYSTEM,
-        quorum::QuorumSystem::new_dissemination(dscale::list_pool(POOL_BLSMR)),
-    );
+    kv::set(KEY_QUORUM_SYSTEM, quorum_system);
     kv::set::<(usize, usize)>(KEY_AVG_COMMIT_LATENCY, (0, 0));
     kv::set::<Vec<Jiffies>>(KEY_COMMIT_LATENCIES, Vec::new());
     kv::set::<(usize, usize)>(KEY_CONFLICT_RATE, (0, 0));
@@ -229,7 +239,11 @@ fn main() {
             run_hotstuff::<NonRotatingHotstuff>(topology, "hotstuff_star_uniform"),
         );
         write_samples(&mut file, topology, "Bullshark", run_bullshark(topology));
-        let (wintermute, conflict_rate) = run_wintermute(topology);
+        let (three_jane, _) =
+            run_blsmr(topology, BLSMRProtocol::ThreeJane, 4, "three_jane_uniform");
+        write_samples(&mut file, topology, "3Jane", three_jane);
+        let (wintermute, conflict_rate) =
+            run_blsmr(topology, BLSMRProtocol::Wintermute, 6, "wintermute_uniform");
         write_samples(&mut file, topology, "Wintermute", wintermute);
         println!(
             "{} Wintermute conflict rate: {conflict_rate:.2}%",
