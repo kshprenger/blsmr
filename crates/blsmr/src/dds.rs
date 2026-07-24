@@ -83,6 +83,10 @@ impl DDS {
         self.send_announce(cmd);
     }
 
+    pub(super) fn record_decision_latency(&self, cmd_id: CmdId) {
+        self.log.record_decision_latency(cmd_id);
+    }
+
     fn prepare_announce(&mut self, cmd: &client::Command) {
         match self.protocol_type {
             BLSMRProtocol::Wintermute => {

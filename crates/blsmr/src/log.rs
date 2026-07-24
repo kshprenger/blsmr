@@ -101,6 +101,13 @@ impl CmdLog {
         self.promote_stable();
     }
 
+    pub fn record_decision_latency(&self, cmd_id: CmdId) {
+        let submitted_at = self.entries[&cmd_id].submitted_at;
+        kv::modify::<Vec<dscale::Jiffies>>(KEY_COMMIT_LATENCIES, |latencies| {
+            latencies.push(dscale::now() - submitted_at);
+        });
+    }
+
     #[cfg(test)]
     pub fn executed_order(&self) -> &[CmdId] {
         &self.execution_order
@@ -120,7 +127,7 @@ impl CmdLog {
             entry.phase = Phase::Stable;
             let latency = dscale::now() - entry.submitted_at;
             let key = entry.cmd.as_ref().map(|cmd| cmd.key);
-            record_latency(latency, id.pid == dscale::pid());
+            record_latency(latency);
             self.try_execute(id);
             if let Some(bucket) = key.and_then(|key| self.by_key.get_mut(&key)) {
                 bucket.retain(|&bucketed| bucketed != id);
@@ -259,16 +266,11 @@ impl CmdLog {
     }
 }
 
-fn record_latency(latency: dscale::Jiffies, record_sample: bool) {
+fn record_latency(latency: dscale::Jiffies) {
     kv::modify::<(usize, usize)>(KEY_AVG_COMMIT_LATENCY, |(sum, count)| {
         *sum += latency.0;
         *count += 1;
     });
-    if record_sample {
-        kv::modify::<Vec<dscale::Jiffies>>(KEY_COMMIT_LATENCIES, |latencies| {
-            latencies.push(latency);
-        });
-    }
 }
 
 pub fn average_commit_latency() -> f64 {

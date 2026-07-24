@@ -97,6 +97,7 @@ impl BLSMR {
     }
 
     fn decide(&mut self, cmd_id: CmdId, deps: Arc<[CmdId]>) {
+        self.dds.record_decision_latency(cmd_id);
         dscale::broadcast_within_pool(POOL_BLSMR, Announce::Commit(Commit { cmd_id, deps }));
     }
 }
