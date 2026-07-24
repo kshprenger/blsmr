@@ -1,2 +1,3 @@
 protocol,nodes,on_message_calls_per_committed_unit,standard_deviation
-Bullshark,2,6.212963,0.003086
+Bullshark,2,9.263279,0.002309
+3Jane,9,3.669285,0.113021

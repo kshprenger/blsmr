@@ -53,7 +53,7 @@ def main():
     ax.set_xscale("log", base=2)
     ax.set_yscale("symlog", linthresh=1)
     ax.set_ylim(bottom=0)
-    ax.set_xticks([2**power for power in range(1, 12)])
+    ax.set_xticks([2**power for power in range(1, 15)])
     ax.get_xaxis().set_major_formatter(plt.ScalarFormatter())
     ax.grid(True, color="#e1e0d9", linewidth=0.8)
     ax.legend()
