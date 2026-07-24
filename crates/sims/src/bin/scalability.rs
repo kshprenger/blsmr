@@ -174,6 +174,8 @@ fn run_bullshark(nodes: usize) -> (f64, f64) {
 }
 
 // scale: quorum for wintermute, 2^14, more budget - less deviation for hotstuff, and add extreme 3Jane
+// Fix x axis on conflict rate.
+// Why do we need consensus at all??? Only for recovery??????
 
 fn run_blsmr(nodes: usize, protocol: BLSMRProtocol) -> (f64, f64) {
     let time_budget = match &protocol {

@@ -1,7 +1,7 @@
 pub mod dds;
 pub mod log;
-mod pbft;
 pub mod process;
+mod quorum;
 
 pub const POOL_BLSMR: &str = dscale::GLOBAL_POOL;
 pub const KEY_SUBMIT_INTERVAL: &str = "submit_interval";

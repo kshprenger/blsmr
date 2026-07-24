@@ -2,14 +2,14 @@
 
 A [dscale](https://codeberg.org/kshprenger/dscale) simulation of BLSMR: a leaderless
 replication protocol where each command's dependency (conflict) set is agreed via a
-fast path, falling back to one-shot PBFT when replicas disagree. Commands execute
+fast path, falling back to Quorum when replicas disagree. Commands execute
 once stable, dependencies first, via Tarjan's SCC algorithm.
 
 ## Crates
 
 - `client` — command/id types and the conflict model.
-- `blsmr` — the protocol: fast-path conflict detection (`dds`), slow-path PBFT
-  (`pbft`), the dependency log/executor (`log`), and process wiring (`process`).
+- `blsmr` — the protocol: fast-path conflict detection (`dds`), slow-path Quorum consensus
+  (`quorum`), the dependency log/executor (`log`), and process wiring (`process`).
 - `hotstuff` — chained HotStuff process.
 - `bullshark` — Bullshark DAG consensus process.
 - `quorum` — quorum systems used by both paths.
