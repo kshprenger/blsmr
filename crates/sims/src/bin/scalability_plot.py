@@ -18,7 +18,7 @@ LINESTYLES = {"3Jane*": "--"}
 
 
 def main():
-    pattern = sys.argv[1] if len(sys.argv) > 1 else str(Path(__file__).parent / "scale" / "scalability_rank*.csv")
+    pattern = sys.argv[1] if len(sys.argv) > 1 else str(Path(__file__).parent / "scale" / "scalability*.csv")
     rows = []
     for path in glob.glob(pattern):
         with open(path, newline="") as f:

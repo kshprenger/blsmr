@@ -1,4 +1,5 @@
 use std::{
+    env,
     fs::File,
     io::Write,
     path::PathBuf,
@@ -103,6 +104,16 @@ fn configs() -> Vec<Config> {
                 .into_iter()
                 .map(move |protocol| Config { nodes, protocol })
         }))
+        .collect()
+}
+
+fn selected_configs() -> Vec<Config> {
+    let nodes = env::var("SCALABILITY_NODES")
+        .ok()
+        .map(|nodes| nodes.parse::<usize>().expect("invalid SCALABILITY_NODES"));
+    configs()
+        .into_iter()
+        .filter(|config| nodes.is_none_or(|nodes| config.nodes == nodes))
         .collect()
 }
 
@@ -224,11 +235,14 @@ fn run(config: Config) -> (Config, f64, f64) {
 }
 
 fn output_path() -> PathBuf {
-    PathBuf::from(format!("scalability_rank{}.csv", mpi::rank()))
+    match env::var("SCALABILITY_NODES") {
+        Ok(nodes) => PathBuf::from(format!("scalability_n{nodes}_rank{}.csv", mpi::rank())),
+        Err(_) => PathBuf::from(format!("scalability_rank{}.csv", mpi::rank())),
+    }
 }
 
 fn main() {
-    let results = mpi::distribute(configs(), run);
+    let results = mpi::distribute(selected_configs(), run);
     let path = output_path();
     let mut file = File::create(&path).expect("failed to create results file");
     writeln!(
