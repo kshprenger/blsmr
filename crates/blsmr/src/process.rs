@@ -102,6 +102,9 @@ impl BLSMR {
         match status {
             AnnounceStatus::DoNothing => {}
             AnnounceStatus::QuorumReady(quorum) => {
+                if self.track_conflict_rate {
+                    log::record_fast_path(quorum.allow_fastpath);
+                }
                 let cmd_id = quorum.quorum[0].id;
                 let deps = dds::union_deps(&quorum.quorum);
                 if quorum.allow_fastpath {
@@ -122,7 +125,14 @@ impl BLSMR {
     }
 
     fn decide(&mut self, cmd_id: CmdId, deps: Arc<[CmdId]>) {
-        self.dds.record_decision_latency(cmd_id);
-        dscale::broadcast_within_pool(POOL_BLSMR, Announce::Commit(Commit { cmd_id, deps }));
+        self.dds.commit(cmd_id, Arc::clone(&deps));
+        if self.track_conflict_rate {
+            log::record_commit(cmd_id);
+        }
+        let peers: Vec<_> = dscale::list_pool(POOL_BLSMR)
+            .into_iter()
+            .filter(|&pid| pid != dscale::pid())
+            .collect();
+        dscale::send_many(&peers, Announce::Commit(Commit { cmd_id, deps }));
     }
 }

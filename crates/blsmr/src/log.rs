@@ -18,6 +18,8 @@ pub struct ConflictTracker {
     arrivals: FxHashMap<CmdId, Jiffies>,
     committers: FxHashMap<CmdId, FxHashSet<dscale::Pid>>,
     completed: Vec<(Jiffies, Jiffies)>,
+    fast_paths: usize,
+    paths: usize,
 }
 
 impl ConflictTracker {
@@ -27,6 +29,8 @@ impl ConflictTracker {
             arrivals: FxHashMap::default(),
             committers: FxHashMap::default(),
             completed: Vec::new(),
+            fast_paths: 0,
+            paths: 0,
         }
     }
 
@@ -59,6 +63,19 @@ impl ConflictTracker {
             .map(|(arrival, _)| commits.partition_point(|commit| commit < arrival))
             .sum();
         100.0 * (pair_count - happens_before_pairs) as f64 / pair_count as f64
+    }
+
+    fn record_fast_path(&mut self, fast: bool) {
+        self.fast_paths += usize::from(fast);
+        self.paths += 1;
+    }
+
+    fn fast_path_percentage(&self) -> f64 {
+        if self.paths == 0 {
+            0.0
+        } else {
+            100.0 * self.fast_paths as f64 / self.paths as f64
+        }
     }
 }
 
@@ -148,13 +165,6 @@ impl CmdLog {
         self.promote_stable();
     }
 
-    pub fn record_decision_latency(&self, cmd_id: CmdId) {
-        let submitted_at = self.entries[&cmd_id].submitted_at;
-        kv::modify::<Vec<dscale::Jiffies>>(KEY_COMMIT_LATENCIES, |latencies| {
-            latencies.push(dscale::now() - submitted_at);
-        });
-    }
-
     fn promote_stable(&mut self) {
         let newly_stable: Vec<CmdId> = self
             .pending_commit
@@ -169,7 +179,9 @@ impl CmdLog {
             entry.phase = Phase::Stable;
             let latency = dscale::now() - entry.submitted_at;
             let key = entry.cmd.as_ref().map(|cmd| cmd.key);
-            record_latency(latency);
+            if id.pid == dscale::pid() {
+                record_latency(latency);
+            }
             self.try_execute(id);
             if let Some(bucket) = key.and_then(|key| self.by_key.get_mut(&key)) {
                 bucket.retain(|&bucketed| bucketed != id);
@@ -311,6 +323,9 @@ fn record_latency(latency: dscale::Jiffies) {
         *sum += latency.0;
         *count += 1;
     });
+    kv::modify::<Vec<dscale::Jiffies>>(KEY_COMMIT_LATENCIES, |latencies| {
+        latencies.push(latency);
+    });
 }
 
 pub fn average_commit_latency() -> f64 {
@@ -338,6 +353,20 @@ pub fn conflict_rate_percentage() -> f64 {
     let mut percentage = 0.0;
     kv::modify::<ConflictTracker>(KEY_CONFLICT_RATE, |tracker| {
         percentage = tracker.percentage();
+    });
+    percentage
+}
+
+pub fn record_fast_path(fast: bool) {
+    kv::modify::<ConflictTracker>(KEY_CONFLICT_RATE, |tracker| {
+        tracker.record_fast_path(fast);
+    });
+}
+
+pub fn fast_path_percentage() -> f64 {
+    let mut percentage = 0.0;
+    kv::modify::<ConflictTracker>(KEY_CONFLICT_RATE, |tracker| {
+        percentage = tracker.fast_path_percentage();
     });
     percentage
 }

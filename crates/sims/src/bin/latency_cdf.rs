@@ -180,7 +180,7 @@ fn run_blsmr(
     protocol: BLSMRProtocol,
     replicas: usize,
     uniform_pool: &'static str,
-) -> (Vec<Jiffies>, f64) {
+) -> (Vec<Jiffies>, f64, f64) {
     let regions = terrestrial_regions(replicas);
     let mut simulation = match topology {
         NetworkTopology::Uniform => uniform_builder::<BLSMR>(uniform_pool, replicas),
@@ -199,7 +199,7 @@ fn run_blsmr(
     kv::set(KEY_SUBMIT_LIMIT, usize::MAX);
     kv::set(KEY_TRACK_CONFLICT_RATE, true);
     kv::set(KEY_ANNOUNCE_TIMEOUT, Jiffies(500));
-    kv::set(KEY_KEY_COUNT, 32usize);
+    kv::set(KEY_KEY_COUNT, 1024usize);
     kv::set(KEY_QUORUM_SYSTEM, quorum_system);
     kv::set::<(usize, usize)>(KEY_AVG_COMMIT_LATENCY, (0, 0));
     kv::set::<Vec<Jiffies>>(KEY_COMMIT_LATENCIES, Vec::new());
@@ -211,6 +211,7 @@ fn run_blsmr(
     (
         kv::get(KEY_COMMIT_LATENCIES),
         log::conflict_rate_percentage(),
+        log::fast_path_percentage(),
     )
 }
 
@@ -244,14 +245,14 @@ fn main() {
             run_hotstuff::<NonRotatingHotstuff>(topology, "hotstuff_star_uniform"),
         );
         write_samples(&mut file, topology, "Bullshark", run_bullshark(topology));
-        let (three_jane, _) =
+        let (three_jane, _, _) =
             run_blsmr(topology, BLSMRProtocol::ThreeJane, 4, "three_jane_uniform");
         write_samples(&mut file, topology, "3Jane", three_jane);
-        let (wintermute, conflict_rate) =
+        let (wintermute, conflict_rate, fast_path_rate) =
             run_blsmr(topology, BLSMRProtocol::Wintermute, 6, "wintermute_uniform");
         write_samples(&mut file, topology, "Wintermute", wintermute);
         println!(
-            "{} Wintermute conflict rate: {conflict_rate:.2}%",
+            "{} Wintermute conflict rate: {conflict_rate:.2}%, fast path rate: {fast_path_rate:.2}%",
             topology.name()
         );
     }

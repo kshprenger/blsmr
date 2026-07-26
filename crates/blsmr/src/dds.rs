@@ -83,10 +83,6 @@ impl DDS {
         self.send_announce(cmd);
     }
 
-    pub(super) fn record_decision_latency(&self, cmd_id: CmdId) {
-        self.log.record_decision_latency(cmd_id);
-    }
-
     fn prepare_announce(&mut self, cmd: &client::Command) {
         match self.protocol_type {
             BLSMRProtocol::Wintermute => {
@@ -128,7 +124,7 @@ impl DDS {
                 AnnounceStatus::DoNothing
             }
             Announce::Commit(commit) => {
-                self.log.commit(commit.cmd_id, Arc::clone(&commit.deps));
+                self.commit(commit.cmd_id, Arc::clone(&commit.deps));
                 AnnounceStatus::DoNothing
             }
             Announce::Res(res) => {
@@ -158,6 +154,10 @@ impl DDS {
                 AnnounceStatus::DoNothing
             }
         }
+    }
+
+    pub(super) fn commit(&mut self, cmd_id: CmdId, deps: Arc<[CmdId]>) {
+        self.log.commit(cmd_id, deps);
     }
 
     pub(super) fn is_my_timer(&self, timer_id: dscale::TimerId) -> bool {
