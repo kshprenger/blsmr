@@ -10,9 +10,11 @@ import matplotlib.pyplot as plt
 COLORS = {
     "Bullshark": "#b65331",
     "3Jane": "#46855c",
+    "3Jane*": "#46855c",
     "Wintermute": "#7a5ca8",
     "HotStuff": "#2a78d6",
 }
+LINESTYLES = {"3Jane*": "--"}
 
 
 def main():
@@ -35,6 +37,8 @@ def main():
             for row in rows
             if row["protocol"] == protocol
         )
+        if not points:
+            continue
         nodes, loads, deviations = zip(*points)
         ax.errorbar(
             nodes,
@@ -42,6 +46,7 @@ def main():
             yerr=deviations,
             label=protocol,
             color=color,
+            linestyle=LINESTYLES.get(protocol, "-"),
             linewidth=2,
             marker="o",
             capsize=3,

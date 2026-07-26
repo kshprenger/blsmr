@@ -59,10 +59,11 @@ impl<P: Process> Process for Measured<P> {
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Protocol {
     Bullshark,
     ThreeJane,
+    ThreeJaneMaxFaults,
     Wintermute,
     Hotstuff,
 }
@@ -72,6 +73,7 @@ impl Protocol {
         match self {
             Self::Bullshark => "Bullshark",
             Self::ThreeJane => "3Jane",
+            Self::ThreeJaneMaxFaults => "3Jane*",
             Self::Wintermute => "Wintermute",
             Self::Hotstuff => "HotStuff",
         }
@@ -96,9 +98,10 @@ fn configs() -> Vec<Config> {
             .into_iter()
             .map(move |protocol| Config { nodes, protocol })
         })
-        .chain(THREE_JANE_NODE_COUNTS.into_iter().map(|nodes| Config {
-            nodes,
-            protocol: Protocol::ThreeJane,
+        .chain(THREE_JANE_NODE_COUNTS.into_iter().flat_map(|nodes| {
+            [Protocol::ThreeJane, Protocol::ThreeJaneMaxFaults]
+                .into_iter()
+                .map(move |protocol| Config { nodes, protocol })
         }))
         .collect()
 }
@@ -179,12 +182,10 @@ fn run_bullshark(nodes: usize) -> (f64, f64) {
     })
 }
 
-// scale: quorum for wintermute, 2^14, more budget - less deviation for hotstuff, and add extreme 3Jane
+// scale: quorum for wintermute, 2^14, more budget
 // Fix x axis on conflict rate. (defined on photo)
-// Do we need extreme 3Jane on scale plot - yes
-// cdf - ok
 
-fn run_blsmr(nodes: usize, protocol: BLSMRProtocol) -> (f64, f64) {
+fn run_blsmr(nodes: usize, protocol: BLSMRProtocol, max_three_jane_faults: bool) -> (f64, f64) {
     let time_budget = match &protocol {
         BLSMRProtocol::Wintermute => WINTERMUTE_TIME_BUDGET,
         _ => TIME_BUDGET,
@@ -192,6 +193,9 @@ fn run_blsmr(nodes: usize, protocol: BLSMRProtocol) -> (f64, f64) {
     let simulation = simulation::<BLSMR>(nodes, time_budget);
     let pids = dscale::list_pool(POOL_BLSMR);
     let quorum_system = match &protocol {
+        BLSMRProtocol::ThreeJane if max_three_jane_faults => {
+            quorum::QuorumSystem::new_witnessing_grid(pids)
+        }
         BLSMRProtocol::ThreeJane => {
             quorum::QuorumSystem::new_witnessing_grid_with_faults(pids, THREE_JANE_FAULTS)
         }
@@ -213,8 +217,9 @@ fn run_blsmr(nodes: usize, protocol: BLSMRProtocol) -> (f64, f64) {
 fn run(config: Config) -> (Config, f64, f64) {
     let (load, standard_deviation) = match config.protocol {
         Protocol::Bullshark => run_bullshark(config.nodes),
-        Protocol::ThreeJane => run_blsmr(config.nodes, BLSMRProtocol::ThreeJane),
-        Protocol::Wintermute => run_blsmr(config.nodes, BLSMRProtocol::Wintermute),
+        Protocol::ThreeJane => run_blsmr(config.nodes, BLSMRProtocol::ThreeJane, false),
+        Protocol::ThreeJaneMaxFaults => run_blsmr(config.nodes, BLSMRProtocol::ThreeJane, true),
+        Protocol::Wintermute => run_blsmr(config.nodes, BLSMRProtocol::Wintermute, false),
         Protocol::Hotstuff => run_hotstuff(config.nodes),
     };
     (config, load, standard_deviation)
@@ -247,7 +252,7 @@ fn main() {
 
 #[cfg(test)]
 mod tests {
-    use super::load_stats;
+    use super::*;
 
     #[test]
     fn zero_commits_has_zero_load() {
@@ -257,5 +262,24 @@ mod tests {
     #[test]
     fn load_stats_measure_per_replica_dispersion() {
         assert_eq!(load_stats(&[10, 20, 30], 30), (2.0, 0.816496580927726));
+    }
+
+    #[test]
+    fn configs_include_both_three_jane_fault_bounds() {
+        let configs = configs();
+        assert_eq!(
+            configs.len(),
+            NODE_COUNTS.len() * 3 + THREE_JANE_NODE_COUNTS.len() * 2
+        );
+        for nodes in THREE_JANE_NODE_COUNTS {
+            assert!(
+                configs.iter().any(|config| {
+                    config.nodes == nodes && config.protocol == Protocol::ThreeJane
+                })
+            );
+            assert!(configs.iter().any(|config| {
+                config.nodes == nodes && config.protocol == Protocol::ThreeJaneMaxFaults
+            }));
+        }
     }
 }
