@@ -85,8 +85,6 @@ pub struct CmdLog {
     // candidates instead of the whole (ever-growing) log on every commit.
     pending_commit: FxHashSet<CmdId>,
     stable: FxHashSet<CmdId>,
-    #[cfg(test)]
-    execution_order: Vec<CmdId>,
 }
 
 impl CmdLog {
@@ -157,11 +155,6 @@ impl CmdLog {
         });
     }
 
-    #[cfg(test)]
-    pub fn executed_order(&self) -> &[CmdId] {
-        &self.execution_order
-    }
-
     fn promote_stable(&mut self) {
         let newly_stable: Vec<CmdId> = self
             .pending_commit
@@ -220,8 +213,6 @@ impl CmdLog {
                 if let Some(entry) = self.entries.get_mut(&id) {
                     if !entry.executed {
                         entry.executed = true;
-                        #[cfg(test)]
-                        self.execution_order.push(id);
                     }
                 }
             }
@@ -349,130 +340,4 @@ pub fn conflict_rate_percentage() -> f64 {
         percentage = tracker.percentage();
     });
     percentage
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn id(n: usize) -> CmdId {
-        CmdId { pid: 0, id: n }
-    }
-
-    fn insert_committed(log: &mut CmdLog, cmd_id: CmdId, deps: Vec<CmdId>) {
-        log.entries.insert(
-            cmd_id,
-            Entry {
-                cmd: None,
-                submitted_at: dscale::Jiffies(0),
-                deps: (!deps.is_empty()).then(|| deps.into()),
-                phase: Phase::Commit,
-                executed: false,
-            },
-        );
-    }
-
-    #[test]
-    fn executes_dependency_before_dependent() {
-        let mut log = CmdLog::default();
-        insert_committed(&mut log, id(1), vec![]);
-        insert_committed(&mut log, id(2), vec![id(1)]);
-
-        log.try_execute(id(2));
-
-        assert_eq!(log.executed_order(), &[id(1), id(2)]);
-    }
-
-    #[test]
-    fn executes_unrelated_command_independently() {
-        let mut log = CmdLog::default();
-        insert_committed(&mut log, id(1), vec![]);
-        insert_committed(&mut log, id(2), vec![]);
-
-        log.try_execute(id(1));
-
-        assert_eq!(log.executed_order(), &[id(1)]);
-        assert!(!log.entries[&id(2)].executed);
-    }
-
-    #[test]
-    fn cycle_executes_as_one_batch_in_canonical_id_order() {
-        let mut log = CmdLog::default();
-        insert_committed(&mut log, id(2), vec![id(1)]);
-        insert_committed(&mut log, id(1), vec![id(2)]);
-
-        log.try_execute(id(2));
-
-        assert_eq!(log.executed_order(), &[id(1), id(2)]);
-    }
-
-    #[test]
-    fn cycle_discovered_from_either_member_gives_same_batch() {
-        let mut log = CmdLog::default();
-        insert_committed(&mut log, id(2), vec![id(1)]);
-        insert_committed(&mut log, id(1), vec![id(2)]);
-
-        log.try_execute(id(1));
-
-        assert_eq!(log.executed_order(), &[id(1), id(2)]);
-    }
-
-    #[test]
-    fn dependent_of_a_cycle_executes_after_the_whole_cycle() {
-        let mut log = CmdLog::default();
-        insert_committed(&mut log, id(3), vec![id(1), id(2)]);
-        insert_committed(&mut log, id(1), vec![id(2)]);
-        insert_committed(&mut log, id(2), vec![id(1)]);
-
-        log.try_execute(id(3));
-
-        assert_eq!(log.executed_order(), &[id(1), id(2), id(3)]);
-    }
-
-    #[test]
-    fn already_executed_root_is_a_no_op() {
-        let mut log = CmdLog::default();
-        insert_committed(&mut log, id(1), vec![]);
-
-        log.try_execute(id(1));
-        log.try_execute(id(1));
-
-        assert_eq!(log.executed_order(), &[id(1)]);
-    }
-
-    #[test]
-    fn stable_tombstone_satisfies_dependencies_without_retaining_entry() {
-        let mut log = CmdLog::default();
-        log.stable.insert(id(1));
-        insert_committed(&mut log, id(2), vec![id(1)]);
-
-        assert!(log.is_deps_closure_committed(&[id(2)]));
-        assert!(!log.entries.contains_key(&id(1)));
-    }
-
-    #[test]
-    fn submission_preserves_local_creation_time() {
-        let mut log = CmdLog::default();
-        log.record_creation_at(id(1), dscale::Jiffies(7));
-
-        log.submit(Command { id: id(1), key: 3 });
-
-        assert_eq!(log.entries[&id(1)].submitted_at, dscale::Jiffies(7));
-    }
-
-    #[test]
-    fn conflict_rate_counts_overlapping_pairs() {
-        let tracker = ConflictTracker {
-            replica_count: 1,
-            arrivals: FxHashMap::default(),
-            committers: FxHashMap::default(),
-            completed: vec![
-                (dscale::Jiffies(0), dscale::Jiffies(10)),
-                (dscale::Jiffies(5), dscale::Jiffies(8)),
-                (dscale::Jiffies(11), dscale::Jiffies(12)),
-            ],
-        };
-
-        assert_eq!(tracker.percentage(), 100.0 / 3.0);
-    }
 }

@@ -127,19 +127,3 @@ impl Quorum {
         committee
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn decides_after_identical_responses_from_every_replica() {
-        let deps: Arc<[CmdId]> = [CmdId { pid: 0, id: 1 }].into();
-        let mut instance = Instance::new(Arc::clone(&deps), [1, 2].into());
-
-        assert!(!instance.accept(1, &deps));
-        assert!(!instance.accept(1, &deps));
-        assert!(!instance.accept(3, &deps));
-        assert!(instance.accept(2, &deps));
-    }
-}

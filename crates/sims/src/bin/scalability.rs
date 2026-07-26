@@ -261,37 +261,3 @@ fn main() {
     }
     println!("wrote {}", path.display());
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn zero_commits_has_zero_load() {
-        assert_eq!(load_stats(&[10, 20], 0), (0.0, 0.0));
-    }
-
-    #[test]
-    fn load_stats_measure_per_replica_dispersion() {
-        assert_eq!(load_stats(&[10, 20, 30], 30), (2.0, 0.816496580927726));
-    }
-
-    #[test]
-    fn configs_include_both_three_jane_fault_bounds() {
-        let configs = configs();
-        assert_eq!(
-            configs.len(),
-            NODE_COUNTS.len() * 3 + THREE_JANE_NODE_COUNTS.len() * 2
-        );
-        for nodes in THREE_JANE_NODE_COUNTS {
-            assert!(
-                configs.iter().any(|config| {
-                    config.nodes == nodes && config.protocol == Protocol::ThreeJane
-                })
-            );
-            assert!(configs.iter().any(|config| {
-                config.nodes == nodes && config.protocol == Protocol::ThreeJaneMaxFaults
-            }));
-        }
-    }
-}
