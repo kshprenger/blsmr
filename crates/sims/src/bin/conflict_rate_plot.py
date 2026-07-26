@@ -54,10 +54,10 @@ def main():
 
     points = summarize(rows)
     conflict_pct, conflict_deviation, latency, latency_deviation = map(list, zip(*points))
-    fast_path_pct = [100 - conflict for conflict in conflict_pct]
+    non_conflict_pct = [100 - conflict for conflict in conflict_pct]
 
     fig, ax = plt.subplots(figsize=(7, 5), dpi=150)
-    fast_path_ax = ax.twinx()
+    non_conflict_ax = ax.twiny()
     fig.patch.set_facecolor(SURFACE)
     ax.set_facecolor(SURFACE)
 
@@ -78,10 +78,11 @@ def main():
         label="Commit latency",
         zorder=3,
     )
-    fast_path_line = fast_path_ax.errorbar(
-        conflict_pct,
-        fast_path_pct,
-        yerr=conflict_deviation,
+    non_conflict_line = non_conflict_ax.errorbar(
+        non_conflict_pct,
+        latency,
+        xerr=conflict_deviation,
+        yerr=latency_deviation,
         color=FAST_PATH,
         linestyle="--",
         linewidth=2,
@@ -92,29 +93,27 @@ def main():
         markeredgewidth=0.5,
         capsize=3,
         elinewidth=1,
-        label="Fast-path rate",
+        label="Latency vs. non-conflicting-pair rate",
         zorder=2,
     )
 
-    ax.set_title("Wintermute: commit latency vs. conflict rate", color=PRIMARY_INK, fontsize=13, pad=12)
-    ax.set_xlabel("conflict rate (%)", color=SECONDARY_INK, fontsize=10)
+    ax.set_title("Wintermute: commit latency vs. pair rate", color=PRIMARY_INK, fontsize=13, pad=12)
+    ax.set_xlabel("conflicting-pair rate (%)", color=SECONDARY_INK, fontsize=10)
     ax.set_ylabel("average commit latency (jiffies)", color=MARKER, fontsize=10)
-    fast_path_ax.set_ylabel("fast-path rate (%)", color=FAST_PATH, fontsize=10)
+    non_conflict_ax.set_xlabel("non-conflicting-pair rate (%)", color=FAST_PATH, fontsize=10)
     ax.set_xlim(0, 100)
-    fast_path_ax.set_ylim(0, 100)
+    non_conflict_ax.set_xlim(0, 100)
 
     ax.grid(True, color=GRIDLINE, linewidth=0.8, zorder=0)
-    ax.spines["top"].set_visible(False)
-    fast_path_ax.spines["top"].set_visible(False)
+    non_conflict_ax.spines["top"].set_color(FAST_PATH)
     for spine in ("left", "bottom"):
         ax.spines[spine].set_color(BASELINE)
-    fast_path_ax.spines["right"].set_color(FAST_PATH)
     ax.tick_params(axis="x", colors=MUTED, labelsize=9)
     ax.tick_params(axis="y", colors=MARKER, labelsize=9)
-    fast_path_ax.tick_params(axis="y", colors=FAST_PATH, labelsize=9)
+    non_conflict_ax.tick_params(axis="x", colors=FAST_PATH, labelsize=9)
     ax.legend(
-        [latency_line, fast_path_line],
-        ["Commit latency", "Fast-path rate"],
+        [latency_line, non_conflict_line],
+        ["Latency vs. conflicting-pair rate", "Latency vs. non-conflicting-pair rate"],
         loc="upper center",
     )
 

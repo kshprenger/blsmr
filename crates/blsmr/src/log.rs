@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use client::{CmdId, Command};
-use dscale::services::kv;
+use dscale::{Jiffies, services::kv};
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::{KEY_AVG_COMMIT_LATENCY, KEY_COMMIT_LATENCIES, KEY_CONFLICT_RATE};
@@ -11,6 +11,55 @@ enum Phase {
     Pending,
     Commit,
     Stable,
+}
+
+pub struct ConflictTracker {
+    replica_count: usize,
+    arrivals: FxHashMap<CmdId, Jiffies>,
+    committers: FxHashMap<CmdId, FxHashSet<dscale::Pid>>,
+    completed: Vec<(Jiffies, Jiffies)>,
+}
+
+impl ConflictTracker {
+    pub fn new(replica_count: usize) -> Self {
+        Self {
+            replica_count,
+            arrivals: FxHashMap::default(),
+            committers: FxHashMap::default(),
+            completed: Vec::new(),
+        }
+    }
+
+    fn record_arrival(&mut self, cmd_id: CmdId) {
+        self.arrivals.entry(cmd_id).or_insert_with(dscale::now);
+    }
+
+    fn record_commit(&mut self, cmd_id: CmdId) {
+        let committers = self.committers.entry(cmd_id).or_default();
+        if committers.insert(dscale::pid()) && committers.len() == self.replica_count {
+            let arrival = self
+                .arrivals
+                .remove(&cmd_id)
+                .expect("commit without arrival");
+            self.committers.remove(&cmd_id);
+            self.completed.push((arrival, dscale::now()));
+        }
+    }
+
+    fn percentage(&self) -> f64 {
+        let pair_count = self.completed.len().saturating_sub(1) * self.completed.len() / 2;
+        if pair_count == 0 {
+            return 0.0;
+        }
+        let mut commits: Vec<Jiffies> = self.completed.iter().map(|(_, commit)| *commit).collect();
+        commits.sort_unstable();
+        let happens_before_pairs: usize = self
+            .completed
+            .iter()
+            .map(|(arrival, _)| commits.partition_point(|commit| commit < arrival))
+            .sum();
+        100.0 * (pair_count - happens_before_pairs) as f64 / pair_count as f64
+    }
 }
 
 struct Entry {
@@ -282,22 +331,24 @@ pub fn average_commit_latency() -> f64 {
     }
 }
 
-pub fn record_conflict(has_conflict: bool) {
-    kv::modify::<(usize, usize)>(KEY_CONFLICT_RATE, |(conflicted, total)| {
-        if has_conflict {
-            *conflicted += 1;
-        }
-        *total += 1;
+pub fn record_arrival(cmd_id: CmdId) {
+    kv::modify::<ConflictTracker>(KEY_CONFLICT_RATE, |tracker| {
+        tracker.record_arrival(cmd_id);
+    });
+}
+
+pub fn record_commit(cmd_id: CmdId) {
+    kv::modify::<ConflictTracker>(KEY_CONFLICT_RATE, |tracker| {
+        tracker.record_commit(cmd_id);
     });
 }
 
 pub fn conflict_rate_percentage() -> f64 {
-    let (conflicted, total) = kv::get::<(usize, usize)>(KEY_CONFLICT_RATE);
-    if total == 0 {
-        0.0
-    } else {
-        100.0 * conflicted as f64 / total as f64
-    }
+    let mut percentage = 0.0;
+    kv::modify::<ConflictTracker>(KEY_CONFLICT_RATE, |tracker| {
+        percentage = tracker.percentage();
+    });
+    percentage
 }
 
 #[cfg(test)]
@@ -407,5 +458,21 @@ mod tests {
         log.submit(Command { id: id(1), key: 3 });
 
         assert_eq!(log.entries[&id(1)].submitted_at, dscale::Jiffies(7));
+    }
+
+    #[test]
+    fn conflict_rate_counts_overlapping_pairs() {
+        let tracker = ConflictTracker {
+            replica_count: 1,
+            arrivals: FxHashMap::default(),
+            committers: FxHashMap::default(),
+            completed: vec![
+                (dscale::Jiffies(0), dscale::Jiffies(10)),
+                (dscale::Jiffies(5), dscale::Jiffies(8)),
+                (dscale::Jiffies(11), dscale::Jiffies(12)),
+            ],
+        };
+
+        assert_eq!(tracker.percentage(), 100.0 / 3.0);
     }
 }

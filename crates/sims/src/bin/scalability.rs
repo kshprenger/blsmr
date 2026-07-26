@@ -10,8 +10,8 @@ use std::{
 
 use blsmr::{
     BLSMRProtocol, KEY_ANNOUNCE_TIMEOUT, KEY_AVG_COMMIT_LATENCY, KEY_COMMIT_LATENCIES,
-    KEY_CONFLICT_RATE, KEY_KEY_COUNT, KEY_PROTOCOL_TYPE, KEY_QUORUM_SYSTEM, KEY_SUBMIT_INTERVAL,
-    POOL_BLSMR, process::BLSMR,
+    KEY_KEY_COUNT, KEY_PROTOCOL_TYPE, KEY_QUORUM_SYSTEM, KEY_SUBMIT_INTERVAL, KEY_SUBMIT_LIMIT,
+    KEY_TRACK_CONFLICT_RATE, POOL_BLSMR, process::BLSMR,
 };
 use bullshark::{Bullshark, KEY_LATENCIES as BULLSHARK_LATENCIES};
 use dscale::{
@@ -182,9 +182,6 @@ fn run_bullshark(nodes: usize) -> (f64, f64) {
     })
 }
 
-// scale: quorum for wintermute, 2^14, more budget
-// Fix x axis on conflict rate. (defined on photo)
-
 fn run_blsmr(nodes: usize, protocol: BLSMRProtocol, max_three_jane_faults: bool) -> (f64, f64) {
     let time_budget = match &protocol {
         BLSMRProtocol::Wintermute => WINTERMUTE_TIME_BUDGET,
@@ -203,12 +200,13 @@ fn run_blsmr(nodes: usize, protocol: BLSMRProtocol, max_three_jane_faults: bool)
     };
     kv::set(KEY_PROTOCOL_TYPE, protocol);
     kv::set(KEY_SUBMIT_INTERVAL, SUBMIT_INTERVAL);
+    kv::set(KEY_SUBMIT_LIMIT, usize::MAX);
+    kv::set(KEY_TRACK_CONFLICT_RATE, false);
     kv::set(KEY_ANNOUNCE_TIMEOUT, Jiffies(500));
     kv::set(KEY_KEY_COUNT, 32usize);
     kv::set(KEY_QUORUM_SYSTEM, quorum_system);
     kv::set::<(usize, usize)>(KEY_AVG_COMMIT_LATENCY, (0, 0));
     kv::set::<Vec<Jiffies>>(KEY_COMMIT_LATENCIES, Vec::new());
-    kv::set::<(usize, usize)>(KEY_CONFLICT_RATE, (0, 0));
     measure(simulation, nodes, || {
         kv::get::<(usize, usize)>(KEY_AVG_COMMIT_LATENCY).1
     })

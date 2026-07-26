@@ -3,7 +3,7 @@ use std::{fs::File, io::Write, path::PathBuf};
 use blsmr::{
     BLSMRProtocol, KEY_ANNOUNCE_TIMEOUT, KEY_AVG_COMMIT_LATENCY, KEY_COMMIT_LATENCIES,
     KEY_CONFLICT_RATE, KEY_KEY_COUNT, KEY_PROTOCOL_TYPE, KEY_QUORUM_SYSTEM, KEY_SUBMIT_INTERVAL,
-    POOL_BLSMR, log, process::BLSMR,
+    KEY_SUBMIT_LIMIT, KEY_TRACK_CONFLICT_RATE, POOL_BLSMR, log, process::BLSMR,
 };
 use dscale::{
     BandwidthConfig, Distr, Jiffies, SimulationBuilder, mpi,
@@ -14,6 +14,7 @@ use dscale::{
 const REPLICAS: usize = 6;
 const TIME_BUDGET: Jiffies = Jiffies(2_000_000);
 const KEY_COUNT: usize = 32;
+const COMMANDS_PER_REPLICA: usize = 20;
 const ANNOUNCE_TIMEOUT: Jiffies = Jiffies(500);
 const SEEDS: [u64; 5] = [42, 43, 44, 45, 46];
 const EARTH_RADIUS_KM: f64 = 6_371.0;
@@ -32,7 +33,7 @@ struct Region {
 }
 
 fn sweep() -> Vec<Params> {
-    [5, 10, 20, 50, 100, 200, 500, 1_000, 2_000, 5_000, 10_000]
+    [1, 19, 24, 31, 37, 46, 59, 78, 114, 200, 20_000]
         .into_iter()
         .flat_map(|submit_interval| {
             SEEDS.into_iter().map(move |seed| Params {
@@ -116,6 +117,8 @@ fn run_once(params: Params) -> (Params, f64, f64) {
     let mut simulation = simulation(params.seed);
     kv::set(KEY_PROTOCOL_TYPE, BLSMRProtocol::Wintermute);
     kv::set(KEY_SUBMIT_INTERVAL, params.submit_interval);
+    kv::set(KEY_SUBMIT_LIMIT, COMMANDS_PER_REPLICA);
+    kv::set(KEY_TRACK_CONFLICT_RATE, true);
     kv::set(KEY_ANNOUNCE_TIMEOUT, ANNOUNCE_TIMEOUT);
     kv::set(KEY_KEY_COUNT, KEY_COUNT);
     kv::set(
@@ -124,7 +127,10 @@ fn run_once(params: Params) -> (Params, f64, f64) {
     );
     kv::set::<(usize, usize)>(KEY_AVG_COMMIT_LATENCY, (0, 0));
     kv::set::<Vec<Jiffies>>(KEY_COMMIT_LATENCIES, Vec::new());
-    kv::set::<(usize, usize)>(KEY_CONFLICT_RATE, (0, 0));
+    kv::set(
+        KEY_CONFLICT_RATE,
+        log::ConflictTracker::new(dscale::list_pool(POOL_BLSMR).len()),
+    );
     simulation.run_full_budget();
     (
         params,
@@ -146,13 +152,13 @@ fn main() {
     let mut file = File::create(&path).expect("failed to create results file");
     writeln!(
         file,
-        "key_count,submit_interval,announce_timeout,seed,conflict_rate_pct,avg_latency_jiffies"
+        "key_count,commands_per_replica,submit_interval,announce_timeout,seed,conflict_rate_pct,avg_latency_jiffies"
     )
     .expect("failed to write header");
     for (params, conflict_rate, latency) in &results {
         writeln!(
             file,
-            "{KEY_COUNT},{},{},{},{conflict_rate:.4},{latency:.4}",
+            "{KEY_COUNT},{COMMANDS_PER_REPLICA},{},{},{},{conflict_rate:.4},{latency:.4}",
             params.submit_interval.0, ANNOUNCE_TIMEOUT.0, params.seed
         )
         .expect("failed to write row");
