@@ -141,7 +141,7 @@ fn run_once(params: Params) -> (Params, f64, f64) {
 
 fn output_path() -> PathBuf {
     PathBuf::from(format!(
-        "terrestrial_conflict_latency_rank{}.csv",
+        "crates/sims/src/bin/conflict_rate/terrestrial_conflict_latency_rank{}.csv",
         mpi::rank()
     ))
 }
