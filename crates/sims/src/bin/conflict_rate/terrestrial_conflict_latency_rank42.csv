@@ -1,2 +1,2 @@
 key_count,commands_per_replica,submit_interval,announce_timeout,seed,conflict_rate_pct,avg_latency_jiffies
-32,20,114,500,44,20.7563,136.0875
+32,20,114,500,44,31.6667,140.0667
