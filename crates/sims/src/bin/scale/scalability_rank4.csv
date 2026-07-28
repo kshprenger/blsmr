@@ -1,3 +1,0 @@
-protocol,nodes,on_message_calls_per_committed_unit,standard_deviation
-Wintermute,4,3.007634,0.045161
-3Jane,121,2.009067,0.011901
