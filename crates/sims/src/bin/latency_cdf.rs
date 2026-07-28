@@ -18,8 +18,7 @@ use hotstuff::{
 const TIME_BUDGET: Jiffies = Jiffies(2_000_000);
 const UNIFORM_LATENCY: Jiffies = Jiffies(100);
 const SEED: u64 = 42;
-const WINTERMUTE_SUBMIT_INTERVAL: Jiffies = Jiffies(10);
-const TERRESTRIAL_WINTERMUTE_SUBMIT_INTERVAL: Jiffies = Jiffies(900);
+const WINTERMUTE_SUBMIT_INTERVAL: Jiffies = Jiffies(55);
 const THREE_JANE_FAULTS: usize = 1;
 const EARTH_RADIUS_KM: f64 = 6_371.0;
 const LIGHT_SPEED_KM_PER_SECOND: f64 = 299_792.458;
@@ -133,13 +132,6 @@ fn light_latency(from: &Region, to: &Region) -> Jiffies {
     Jiffies((distance_km / LIGHT_SPEED_KM_PER_SECOND * 1_000.0).ceil() as usize)
 }
 
-fn wintermute_submit_interval(topology: NetworkTopology) -> Jiffies {
-    match topology {
-        NetworkTopology::Uniform => WINTERMUTE_SUBMIT_INTERVAL,
-        NetworkTopology::Terrestrial => TERRESTRIAL_WINTERMUTE_SUBMIT_INTERVAL,
-    }
-}
-
 fn run_hotstuff<P: Process + Default + Send + 'static>(
     topology: NetworkTopology,
     uniform_pool: &'static str,
@@ -195,7 +187,7 @@ fn run_blsmr(
         _ => quorum::QuorumSystem::new_dissemination(dscale::list_pool(POOL_BLSMR)),
     };
     kv::set(KEY_PROTOCOL_TYPE, protocol);
-    kv::set(KEY_SUBMIT_INTERVAL, wintermute_submit_interval(topology));
+    kv::set(KEY_SUBMIT_INTERVAL, WINTERMUTE_SUBMIT_INTERVAL);
     kv::set(KEY_SUBMIT_LIMIT, usize::MAX);
     kv::set(KEY_TRACK_CONFLICT_RATE, true);
     kv::set(KEY_ANNOUNCE_TIMEOUT, Jiffies(500));
