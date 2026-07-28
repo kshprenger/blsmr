@@ -50,19 +50,12 @@ impl dscale::Process for BLSMR {
     }
     fn on_message(&mut self, from: dscale::Pid, message: dscale::MessagePtr) {
         if let Some(announce_message) = message.try_as_type::<Announce>() {
-            if self.track_conflict_rate {
-                match announce_message {
-                    Announce::Req(req) => log::record_arrival(req.cmd.id),
-                    Announce::Commit(commit) => log::record_arrival(commit.cmd_id),
-                    Announce::Res(_) => {}
-                }
+            if self.track_conflict_rate
+                && let Announce::Req(req) = announce_message
+            {
+                log::record_arrival(req.cmd.id, req.cmd.key);
             }
             let status = self.dds.on_message(from, announce_message);
-            if self.track_conflict_rate
-                && let Announce::Commit(commit) = announce_message
-            {
-                log::record_commit(commit.cmd_id);
-            }
             self.handle_announce_status(status);
         } else if let Some(quorum_message) = message.try_as_type::<QuorumMsg>() {
             let status = self.quorum.on_message(from, quorum_message);
@@ -76,7 +69,7 @@ impl dscale::Process for BLSMR {
         } else if id == self.current_submit_timer_id {
             let cmd = client::create_cmd(&mut self.rng, self.key_count);
             if self.track_conflict_rate {
-                log::record_arrival(cmd.id);
+                log::record_arrival(cmd.id, cmd.key);
             }
             self.dds.announce(cmd);
             self.submitted += 1;
@@ -126,9 +119,6 @@ impl BLSMR {
 
     fn decide(&mut self, cmd_id: CmdId, deps: Arc<[CmdId]>) {
         self.dds.commit(cmd_id, Arc::clone(&deps));
-        if self.track_conflict_rate {
-            log::record_commit(cmd_id);
-        }
         let peers: Vec<_> = dscale::list_pool(POOL_BLSMR)
             .into_iter()
             .filter(|&pid| pid != dscale::pid())

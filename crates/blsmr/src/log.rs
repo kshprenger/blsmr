@@ -1,10 +1,12 @@
 use std::sync::Arc;
 
 use client::{CmdId, Command};
-use dscale::{Jiffies, services::kv};
+use dscale::services::kv;
 use rustc_hash::{FxHashMap, FxHashSet};
 
-use crate::{KEY_AVG_COMMIT_LATENCY, KEY_COMMIT_LATENCIES, KEY_CONFLICT_RATE};
+use crate::{
+    KEY_AVG_COMMIT_LATENCY, KEY_COMMIT_LATENCIES, KEY_CONFLICT_RATE, KEY_TRACK_CONFLICT_RATE,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Phase {
@@ -15,54 +17,73 @@ enum Phase {
 
 pub struct ConflictTracker {
     replica_count: usize,
-    arrivals: FxHashMap<CmdId, Jiffies>,
-    committers: FxHashMap<CmdId, FxHashSet<dscale::Pid>>,
-    completed: Vec<(Jiffies, Jiffies)>,
+    commands: FxHashMap<CmdId, TrackedCommand>,
+    conflicting_commands: usize,
+    executed_commands: usize,
     fast_paths: usize,
     paths: usize,
+}
+
+struct TrackedCommand {
+    key: usize,
+    executors: FxHashSet<dscale::Pid>,
 }
 
 impl ConflictTracker {
     pub fn new(replica_count: usize) -> Self {
         Self {
             replica_count,
-            arrivals: FxHashMap::default(),
-            committers: FxHashMap::default(),
-            completed: Vec::new(),
+            commands: FxHashMap::default(),
+            conflicting_commands: 0,
+            executed_commands: 0,
             fast_paths: 0,
             paths: 0,
         }
     }
 
-    fn record_arrival(&mut self, cmd_id: CmdId) {
-        self.arrivals.entry(cmd_id).or_insert_with(dscale::now);
+    fn record_arrival(&mut self, cmd_id: CmdId, key: usize) {
+        self.commands
+            .entry(cmd_id)
+            .or_insert_with(|| TrackedCommand {
+                key,
+                executors: FxHashSet::default(),
+            });
     }
 
-    fn record_commit(&mut self, cmd_id: CmdId) {
-        let committers = self.committers.entry(cmd_id).or_default();
-        if committers.insert(dscale::pid()) && committers.len() == self.replica_count {
-            let arrival = self
-                .arrivals
-                .remove(&cmd_id)
-                .expect("commit without arrival");
-            self.committers.remove(&cmd_id);
-            self.completed.push((arrival, dscale::now()));
+    fn record_execution(&mut self, pid: dscale::Pid, cmd_id: CmdId, key: usize) {
+        let first_execution = self
+            .commands
+            .get(&cmd_id)
+            .is_none_or(|command| command.executors.is_empty());
+        if first_execution {
+            self.executed_commands += 1;
+            self.conflicting_commands +=
+                usize::from(self.commands.iter().any(|(&other_id, other)| {
+                    other_id != cmd_id
+                        && other.key == key
+                        && other.executors.len() < self.replica_count
+                }));
+        }
+
+        let command = self
+            .commands
+            .entry(cmd_id)
+            .or_insert_with(|| TrackedCommand {
+                key,
+                executors: FxHashSet::default(),
+            });
+        command.executors.insert(pid);
+        if command.executors.len() == self.replica_count {
+            self.commands.remove(&cmd_id);
         }
     }
 
     fn percentage(&self) -> f64 {
-        let pair_count = self.completed.len().saturating_sub(1) * self.completed.len() / 2;
-        if pair_count == 0 {
-            return 0.0;
+        if self.executed_commands == 0 {
+            0.0
+        } else {
+            100.0 * self.conflicting_commands as f64 / self.executed_commands as f64
         }
-        let mut commits: Vec<Jiffies> = self.completed.iter().map(|(_, commit)| *commit).collect();
-        commits.sort_unstable();
-        let happens_before_pairs: usize = self
-            .completed
-            .iter()
-            .map(|(arrival, _)| commits.partition_point(|commit| commit < arrival))
-            .sum();
-        100.0 * (pair_count - happens_before_pairs) as f64 / pair_count as f64
     }
 
     fn record_fast_path(&mut self, fast: bool) {
@@ -222,9 +243,12 @@ impl CmdLog {
         for mut scc in self.tarjan_sccs(&pending) {
             scc.sort();
             for id in scc {
-                if let Some(entry) = self.entries.get_mut(&id) {
-                    if !entry.executed {
-                        entry.executed = true;
+                if let Some(entry) = self.entries.get_mut(&id)
+                    && !entry.executed
+                {
+                    entry.executed = true;
+                    if let Some(cmd) = entry.cmd {
+                        record_execution(cmd.id, cmd.key);
                     }
                 }
             }
@@ -337,15 +361,18 @@ pub fn average_commit_latency() -> f64 {
     }
 }
 
-pub fn record_arrival(cmd_id: CmdId) {
+pub fn record_arrival(cmd_id: CmdId, key: usize) {
     kv::modify::<ConflictTracker>(KEY_CONFLICT_RATE, |tracker| {
-        tracker.record_arrival(cmd_id);
+        tracker.record_arrival(cmd_id, key);
     });
 }
 
-pub fn record_commit(cmd_id: CmdId) {
+fn record_execution(cmd_id: CmdId, key: usize) {
+    if !kv::get::<bool>(KEY_TRACK_CONFLICT_RATE) {
+        return;
+    }
     kv::modify::<ConflictTracker>(KEY_CONFLICT_RATE, |tracker| {
-        tracker.record_commit(cmd_id);
+        tracker.record_execution(dscale::pid(), cmd_id, key);
     });
 }
 
@@ -369,4 +396,56 @@ pub fn fast_path_percentage() -> f64 {
         percentage = tracker.fast_path_percentage();
     });
     percentage
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn cmd(id: usize) -> CmdId {
+        CmdId { pid: 0, id }
+    }
+
+    #[test]
+    fn conflict_is_counted_once_on_first_execution() {
+        let mut tracker = ConflictTracker::new(2);
+        tracker.record_arrival(cmd(1), 7);
+        tracker.record_arrival(cmd(2), 7);
+
+        tracker.record_execution(0, cmd(1), 7);
+        tracker.record_execution(1, cmd(1), 7);
+
+        assert_eq!(tracker.executed_commands, 1);
+        assert_eq!(tracker.conflicting_commands, 1);
+        assert_eq!(tracker.percentage(), 100.0);
+    }
+
+    #[test]
+    fn fully_executed_commands_stop_conflicting() {
+        let mut tracker = ConflictTracker::new(2);
+        tracker.record_arrival(cmd(1), 7);
+        tracker.record_arrival(cmd(2), 7);
+
+        tracker.record_execution(0, cmd(1), 7);
+        tracker.record_execution(1, cmd(1), 7);
+        tracker.record_execution(0, cmd(2), 7);
+
+        assert_eq!(tracker.executed_commands, 2);
+        assert_eq!(tracker.conflicting_commands, 1);
+        assert_eq!(tracker.percentage(), 50.0);
+    }
+
+    #[test]
+    fn different_keys_do_not_conflict() {
+        let mut tracker = ConflictTracker::new(2);
+        tracker.record_arrival(cmd(1), 7);
+        tracker.record_arrival(cmd(2), 8);
+
+        tracker.record_execution(0, cmd(1), 7);
+        tracker.record_execution(0, cmd(2), 8);
+
+        assert_eq!(tracker.executed_commands, 2);
+        assert_eq!(tracker.conflicting_commands, 0);
+        assert_eq!(tracker.percentage(), 0.0);
+    }
 }

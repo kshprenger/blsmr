@@ -199,7 +199,7 @@ fn run_blsmr(
     kv::set(KEY_SUBMIT_LIMIT, usize::MAX);
     kv::set(KEY_TRACK_CONFLICT_RATE, true);
     kv::set(KEY_ANNOUNCE_TIMEOUT, Jiffies(500));
-    kv::set(KEY_KEY_COUNT, 1024usize);
+    kv::set(KEY_KEY_COUNT, 512usize);
     kv::set(KEY_QUORUM_SYSTEM, quorum_system);
     kv::set::<(usize, usize)>(KEY_AVG_COMMIT_LATENCY, (0, 0));
     kv::set::<Vec<Jiffies>>(KEY_COMMIT_LATENCIES, Vec::new());

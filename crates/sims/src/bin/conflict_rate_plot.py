@@ -93,14 +93,14 @@ def main():
         markeredgewidth=0.5,
         capsize=3,
         elinewidth=1,
-        label="Latency vs. non-conflicting-pair rate",
+        label="Latency vs. non-conflicting-command rate",
         zorder=2,
     )
 
-    ax.set_title("Wintermute: commit latency vs. pair rate", color=PRIMARY_INK, fontsize=13, pad=12)
-    ax.set_xlabel("conflicting-pair rate (%)", color=SECONDARY_INK, fontsize=10)
+    ax.set_title("Wintermute: commit latency vs. command conflict rate", color=PRIMARY_INK, fontsize=13, pad=12)
+    ax.set_xlabel("conflicting-command rate (%)", color=SECONDARY_INK, fontsize=10)
     ax.set_ylabel("average commit latency (jiffies)", color=MARKER, fontsize=10)
-    non_conflict_ax.set_xlabel("non-conflicting-pair rate (%)", color=FAST_PATH, fontsize=10)
+    non_conflict_ax.set_xlabel("non-conflicting-command rate (%)", color=FAST_PATH, fontsize=10)
     ax.set_xlim(0, 100)
     non_conflict_ax.set_xlim(0, 100)
 
@@ -113,7 +113,7 @@ def main():
     non_conflict_ax.tick_params(axis="x", colors=FAST_PATH, labelsize=9)
     ax.legend(
         [latency_line, non_conflict_line],
-        ["Latency vs. conflicting-pair rate", "Latency vs. non-conflicting-pair rate"],
+        ["Latency vs. conflicting-command rate", "Latency vs. non-conflicting-command rate"],
         loc="upper center",
     )
 
