@@ -21,20 +21,16 @@ use dscale::{
 };
 use hotstuff::{B0, ChainedHotstuff, KEY_LATENCIES as HOTSTUFF_LATENCIES, Node};
 
-const NODE_COUNTS: [usize; 14] = [
-    2, 4, 8, 16, 32, 64, 128, 256, 512, 1_024, 2_048, 4_096, 8_192, 16_384,
-];
-const THREE_JANE_NODE_COUNTS: [usize; 13] = [
-    4, 9, 16, 36, 64, 121, 256, 529, 1_024, 2_025, 4_096, 8_281, 16_384,
-];
-const TIME_BUDGET: Jiffies = Jiffies(500_000);
+const NODE_COUNTS: [usize; 11] = [2, 4, 8, 16, 32, 64, 128, 256, 512, 1_024, 2_048];
+const THREE_JANE_NODE_COUNTS: [usize; 10] = [4, 9, 16, 36, 64, 121, 256, 529, 1_024, 2_025];
+const BLSMR_TIME_BUDGET: Jiffies = Jiffies(40_000);
 const HOTSTUFF_TIME_BUDGET: Jiffies = Jiffies(5_000_000);
 const BULLSHARK_TIME_BUDGET: Jiffies = Jiffies(100_000);
-const WINTERMUTE_TIME_BUDGET: Jiffies = Jiffies(50_000);
 const NETWORK_LATENCY: Jiffies = Jiffies(100);
 const SUBMIT_INTERVAL: Jiffies = Jiffies(2_000);
 const THREE_JANE_FAULTS: usize = 1;
-const MAX_NODES: usize = 16_384;
+const MAX_NODES: usize = 2_048;
+const BULLSHARK_MAX_NODES: usize = 512;
 static MESSAGE_COUNTS: [AtomicUsize; MAX_NODES] = [const { AtomicUsize::new(0) }; MAX_NODES];
 
 struct Measured<P>(P);
@@ -104,6 +100,9 @@ fn configs() -> Vec<Config> {
                 .into_iter()
                 .map(move |protocol| Config { nodes, protocol })
         }))
+        .filter(|config| {
+            config.protocol != Protocol::Bullshark || config.nodes <= BULLSHARK_MAX_NODES
+        })
         .collect()
 }
 
@@ -194,11 +193,7 @@ fn run_bullshark(nodes: usize) -> (f64, f64) {
 }
 
 fn run_blsmr(nodes: usize, protocol: BLSMRProtocol, max_three_jane_faults: bool) -> (f64, f64) {
-    let time_budget = match &protocol {
-        BLSMRProtocol::Wintermute => WINTERMUTE_TIME_BUDGET,
-        _ => TIME_BUDGET,
-    };
-    let simulation = simulation::<BLSMR>(nodes, time_budget);
+    let simulation = simulation::<BLSMR>(nodes, BLSMR_TIME_BUDGET);
     let pids = dscale::list_pool(POOL_BLSMR);
     let quorum_system = match &protocol {
         BLSMRProtocol::ThreeJane if max_three_jane_faults => {
