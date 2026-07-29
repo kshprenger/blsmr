@@ -98,7 +98,7 @@ def main():
         zorder=2,
     )
 
-    ax.set_title("Wintermute: commit latency vs. command conflict rate", color=PRIMARY_INK, fontsize=13, pad=12)
+    # ax.set_title("Wintermute: commit latency vs. command conflict rate", color=PRIMARY_INK, fontsize=13, pad=12)
     ax.set_xlabel("conflicting-command rate (%)", color=SECONDARY_INK, fontsize=10)
     ax.set_ylabel("average commit latency (jiffies)", color=MARKER, fontsize=10)
     fast_path_ax.set_ylabel("fast-path rate (%)", color=FAST_PATH, fontsize=10)
