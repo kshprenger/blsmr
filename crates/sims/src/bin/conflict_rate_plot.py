@@ -35,12 +35,15 @@ def summarize(rows):
     for submit_interval, runs in by_interval.items():
         conflicts = [float(run["conflict_rate_pct"]) for run in runs]
         latencies = [float(run["avg_latency_jiffies"]) for run in runs]
+        fast_paths = [float(run["fast_path_rate_pct"]) for run in runs]
         points.append(
             (
                 fmean(conflicts),
                 stdev(conflicts),
                 fmean(latencies),
                 stdev(latencies),
+                fmean(fast_paths),
+                stdev(fast_paths),
             )
         )
     return sorted(points)
@@ -53,11 +56,10 @@ def main():
         raise SystemExit(f"no rows found for pattern {pattern!r} — run the latency sweep first")
 
     points = summarize(rows)
-    conflict_pct, conflict_deviation, latency, latency_deviation = map(list, zip(*points))
-    non_conflict_pct = [100 - conflict for conflict in conflict_pct]
+    conflict_pct, conflict_deviation, latency, latency_deviation, fast_path_pct, fast_path_deviation = map(list, zip(*points))
 
     fig, ax = plt.subplots(figsize=(7, 5), dpi=150)
-    non_conflict_ax = ax.twinx()
+    fast_path_ax = ax.twinx()
     fig.patch.set_facecolor(SURFACE)
     ax.set_facecolor(SURFACE)
 
@@ -78,10 +80,10 @@ def main():
         label="Commit latency",
         zorder=3,
     )
-    non_conflict_line = non_conflict_ax.errorbar(
+    fast_path_line = fast_path_ax.errorbar(
         conflict_pct,
-        non_conflict_pct,
-        yerr=conflict_deviation,
+        fast_path_pct,
+        yerr=fast_path_deviation,
         color=FAST_PATH,
         linestyle="--",
         linewidth=2,
@@ -92,27 +94,28 @@ def main():
         markeredgewidth=0.5,
         capsize=3,
         elinewidth=1,
-        label="Non-conflicting-command rate",
+        label="Fast-path rate",
         zorder=2,
     )
 
     ax.set_title("Wintermute: commit latency vs. command conflict rate", color=PRIMARY_INK, fontsize=13, pad=12)
     ax.set_xlabel("conflicting-command rate (%)", color=SECONDARY_INK, fontsize=10)
     ax.set_ylabel("average commit latency (jiffies)", color=MARKER, fontsize=10)
-    non_conflict_ax.set_ylabel("non-conflicting-command rate (%)", color=FAST_PATH, fontsize=10)
+    fast_path_ax.set_ylabel("fast-path rate (%)", color=FAST_PATH, fontsize=10)
     ax.set_xlim(0, 100)
-    non_conflict_ax.set_ylim(0, 100)
+    ax.set_ylim(bottom=0)
+    fast_path_ax.set_ylim(0, 100)
 
     ax.grid(True, color=GRIDLINE, linewidth=0.8, zorder=0)
-    non_conflict_ax.spines["right"].set_color(FAST_PATH)
+    fast_path_ax.spines["right"].set_color(FAST_PATH)
     for spine in ("left", "bottom"):
         ax.spines[spine].set_color(BASELINE)
     ax.tick_params(axis="x", colors=MUTED, labelsize=9)
     ax.tick_params(axis="y", colors=MARKER, labelsize=9)
-    non_conflict_ax.tick_params(axis="y", colors=FAST_PATH, labelsize=9)
+    fast_path_ax.tick_params(axis="y", colors=FAST_PATH, labelsize=9)
     ax.legend(
-        [latency_line, non_conflict_line],
-        ["Commit latency", "Non-conflicting-command rate"],
+        [latency_line, fast_path_line],
+        ["Commit latency", "Fast-path rate"],
         loc="upper center",
     )
 

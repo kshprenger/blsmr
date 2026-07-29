@@ -209,7 +209,7 @@ fn run_blsmr(nodes: usize, protocol: BLSMRProtocol, max_three_jane_faults: bool)
     kv::set(KEY_SUBMIT_LIMIT, usize::MAX);
     kv::set(KEY_TRACK_CONFLICT_RATE, false);
     kv::set(KEY_ANNOUNCE_TIMEOUT, Jiffies(500));
-    kv::set(KEY_KEY_COUNT, 32usize);
+    kv::set(KEY_KEY_COUNT, 10_000_000usize);
     kv::set(KEY_QUORUM_SYSTEM, quorum_system);
     kv::set::<(usize, usize)>(KEY_AVG_COMMIT_LATENCY, (0, 0));
     kv::set::<Vec<Jiffies>>(KEY_COMMIT_LATENCIES, Vec::new());
@@ -217,7 +217,8 @@ fn run_blsmr(nodes: usize, protocol: BLSMRProtocol, max_three_jane_faults: bool)
         kv::get::<(usize, usize)>(KEY_AVG_COMMIT_LATENCY).1
     })
 }
-
+// Also add some latency for commands.
+// https://en.wikipedia.org/wiki/Zipf%27s_law distribution access to keys, with zipf 0.99
 fn run(config: Config) -> (Config, f64, f64) {
     let (load, standard_deviation) = match config.protocol {
         Protocol::Bullshark => run_bullshark(config.nodes),

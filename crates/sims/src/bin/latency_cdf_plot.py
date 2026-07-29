@@ -53,10 +53,11 @@ def main():
         ax.set_xlim(left=0)
         ax.set_ylim(0, 1)
         ax.grid(True, color="#e1e0d9", linewidth=0.8)
-        ax.legend()
 
     axes[0].set_ylabel("cumulative fraction")
-    fig.tight_layout()
+    handles, labels = axes[0].get_legend_handles_labels()
+    fig.legend(handles, labels, loc="upper right", bbox_to_anchor=(0.99, 0.95))
+    fig.tight_layout(rect=(0, 0, 0.84, 1))
     plt.show()
 
 

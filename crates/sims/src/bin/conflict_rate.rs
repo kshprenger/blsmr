@@ -113,7 +113,7 @@ fn simulation(seed: u64) -> Box<dyn dscale::SimulationRunner> {
     builder.build()
 }
 
-fn run_once(params: Params) -> (Params, f64, f64) {
+fn run_once(params: Params) -> (Params, f64, f64, f64) {
     let mut simulation = simulation(params.seed);
     kv::set(KEY_PROTOCOL_TYPE, BLSMRProtocol::Wintermute);
     kv::set(KEY_SUBMIT_INTERVAL, params.submit_interval);
@@ -136,6 +136,7 @@ fn run_once(params: Params) -> (Params, f64, f64) {
         params,
         log::conflict_rate_percentage(),
         log::average_commit_latency(),
+        log::fast_path_percentage(),
     )
 }
 
@@ -152,13 +153,13 @@ fn main() {
     let mut file = File::create(&path).expect("failed to create results file");
     writeln!(
         file,
-        "key_count,commands_per_replica,submit_interval,announce_timeout,seed,conflict_rate_pct,avg_latency_jiffies"
+        "key_count,commands_per_replica,submit_interval,announce_timeout,seed,conflict_rate_pct,avg_latency_jiffies,fast_path_rate_pct"
     )
     .expect("failed to write header");
-    for (params, conflict_rate, latency) in &results {
+    for (params, conflict_rate, latency, fast_path_rate) in &results {
         writeln!(
             file,
-            "{KEY_COUNT},{COMMANDS_PER_REPLICA},{},{},{},{conflict_rate:.4},{latency:.4}",
+            "{KEY_COUNT},{COMMANDS_PER_REPLICA},{},{},{},{conflict_rate:.4},{latency:.4},{fast_path_rate:.4}",
             params.submit_interval.0, ANNOUNCE_TIMEOUT.0, params.seed
         )
         .expect("failed to write row");
