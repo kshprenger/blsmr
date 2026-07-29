@@ -14,6 +14,7 @@ pub const KEY_COMMIT_LATENCIES: &str = "commit_latencies";
 pub const KEY_CONFLICT_RATE: &str = "conflict_rate";
 pub const KEY_TRACK_CONFLICT_RATE: &str = "track_conflict_rate";
 pub const KEY_KEY_COUNT: &str = "key_count";
+pub const KEY_ZIPF_EXPONENT: &str = "zipf_exponent";
 
 #[derive(Clone)]
 pub enum BLSMRProtocol {

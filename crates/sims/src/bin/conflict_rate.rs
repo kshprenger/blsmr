@@ -3,7 +3,7 @@ use std::{fs::File, io::Write, path::PathBuf};
 use blsmr::{
     BLSMRProtocol, KEY_ANNOUNCE_TIMEOUT, KEY_AVG_COMMIT_LATENCY, KEY_COMMIT_LATENCIES,
     KEY_CONFLICT_RATE, KEY_KEY_COUNT, KEY_PROTOCOL_TYPE, KEY_QUORUM_SYSTEM, KEY_SUBMIT_INTERVAL,
-    KEY_SUBMIT_LIMIT, KEY_TRACK_CONFLICT_RATE, POOL_BLSMR, log, process::BLSMR,
+    KEY_SUBMIT_LIMIT, KEY_TRACK_CONFLICT_RATE, KEY_ZIPF_EXPONENT, POOL_BLSMR, log, process::BLSMR,
 };
 use dscale::{
     BandwidthConfig, Distr, Jiffies, SimulationBuilder, mpi,
@@ -121,6 +121,7 @@ fn run_once(params: Params) -> (Params, f64, f64, f64) {
     kv::set(KEY_TRACK_CONFLICT_RATE, true);
     kv::set(KEY_ANNOUNCE_TIMEOUT, ANNOUNCE_TIMEOUT);
     kv::set(KEY_KEY_COUNT, KEY_COUNT);
+    kv::set::<Option<f64>>(KEY_ZIPF_EXPONENT, None);
     kv::set(
         KEY_QUORUM_SYSTEM,
         quorum::QuorumSystem::new_dissemination(dscale::list_pool(POOL_BLSMR)),

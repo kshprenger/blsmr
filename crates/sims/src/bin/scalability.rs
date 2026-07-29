@@ -12,7 +12,7 @@ use std::{
 use blsmr::{
     BLSMRProtocol, KEY_ANNOUNCE_TIMEOUT, KEY_AVG_COMMIT_LATENCY, KEY_COMMIT_LATENCIES,
     KEY_KEY_COUNT, KEY_PROTOCOL_TYPE, KEY_QUORUM_SYSTEM, KEY_SUBMIT_INTERVAL, KEY_SUBMIT_LIMIT,
-    KEY_TRACK_CONFLICT_RATE, POOL_BLSMR, process::BLSMR,
+    KEY_TRACK_CONFLICT_RATE, KEY_ZIPF_EXPONENT, POOL_BLSMR, process::BLSMR,
 };
 use bullshark::{Bullshark, KEY_LATENCIES as BULLSHARK_LATENCIES};
 use dscale::{
@@ -29,6 +29,7 @@ const BULLSHARK_TIME_BUDGET: Jiffies = Jiffies(100_000);
 const NETWORK_LATENCY: Jiffies = Jiffies(100);
 const SUBMIT_INTERVAL: Jiffies = Jiffies(2_000);
 const THREE_JANE_FAULTS: usize = 1;
+const THREE_JANE_ZIPF_EXPONENT: f64 = 0.99;
 const MAX_NODES: usize = 2_048;
 const BULLSHARK_MAX_NODES: usize = 512;
 static MESSAGE_COUNTS: [AtomicUsize; MAX_NODES] = [const { AtomicUsize::new(0) }; MAX_NODES];
@@ -195,6 +196,8 @@ fn run_bullshark(nodes: usize) -> (f64, f64) {
 fn run_blsmr(nodes: usize, protocol: BLSMRProtocol, max_three_jane_faults: bool) -> (f64, f64) {
     let simulation = simulation::<BLSMR>(nodes, BLSMR_TIME_BUDGET);
     let pids = dscale::list_pool(POOL_BLSMR);
+    let zipf_exponent =
+        matches!(&protocol, BLSMRProtocol::ThreeJane).then_some(THREE_JANE_ZIPF_EXPONENT);
     let quorum_system = match &protocol {
         BLSMRProtocol::ThreeJane if max_three_jane_faults => {
             quorum::QuorumSystem::new_witnessing_grid(pids)
@@ -210,6 +213,7 @@ fn run_blsmr(nodes: usize, protocol: BLSMRProtocol, max_three_jane_faults: bool)
     kv::set(KEY_TRACK_CONFLICT_RATE, false);
     kv::set(KEY_ANNOUNCE_TIMEOUT, Jiffies(500));
     kv::set(KEY_KEY_COUNT, 10_000_000usize);
+    kv::set(KEY_ZIPF_EXPONENT, zipf_exponent);
     kv::set(KEY_QUORUM_SYSTEM, quorum_system);
     kv::set::<(usize, usize)>(KEY_AVG_COMMIT_LATENCY, (0, 0));
     kv::set::<Vec<Jiffies>>(KEY_COMMIT_LATENCIES, Vec::new());
@@ -217,8 +221,6 @@ fn run_blsmr(nodes: usize, protocol: BLSMRProtocol, max_three_jane_faults: bool)
         kv::get::<(usize, usize)>(KEY_AVG_COMMIT_LATENCY).1
     })
 }
-// Also add some latency for commands.
-// https://en.wikipedia.org/wiki/Zipf%27s_law distribution access to keys, with zipf 0.99
 fn run(config: Config) -> (Config, f64, f64) {
     let (load, standard_deviation) = match config.protocol {
         Protocol::Bullshark => run_bullshark(config.nodes),

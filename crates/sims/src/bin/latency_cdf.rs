@@ -3,7 +3,7 @@ use std::{fs::File, io::Write, path::PathBuf, sync::Arc};
 use blsmr::{
     BLSMRProtocol, KEY_ANNOUNCE_TIMEOUT, KEY_AVG_COMMIT_LATENCY, KEY_COMMIT_LATENCIES,
     KEY_CONFLICT_RATE, KEY_KEY_COUNT, KEY_PROTOCOL_TYPE, KEY_QUORUM_SYSTEM, KEY_SUBMIT_INTERVAL,
-    KEY_SUBMIT_LIMIT, KEY_TRACK_CONFLICT_RATE, POOL_BLSMR, log, process::BLSMR,
+    KEY_SUBMIT_LIMIT, KEY_TRACK_CONFLICT_RATE, KEY_ZIPF_EXPONENT, POOL_BLSMR, log, process::BLSMR,
 };
 use bullshark::{Bullshark, KEY_LATENCIES as BULLSHARK_LATENCIES};
 use dscale::{
@@ -192,6 +192,7 @@ fn run_blsmr(
     kv::set(KEY_TRACK_CONFLICT_RATE, true);
     kv::set(KEY_ANNOUNCE_TIMEOUT, Jiffies(500));
     kv::set(KEY_KEY_COUNT, 512usize);
+    kv::set::<Option<f64>>(KEY_ZIPF_EXPONENT, None);
     kv::set(KEY_QUORUM_SYSTEM, quorum_system);
     kv::set::<(usize, usize)>(KEY_AVG_COMMIT_LATENCY, (0, 0));
     kv::set::<Vec<Jiffies>>(KEY_COMMIT_LATENCIES, Vec::new());
@@ -250,3 +251,7 @@ fn main() {
     }
     println!("wrote {}", path.display());
 }
+
+// Same colors for protoicols across all charts
+// 25 nodes for 3Jane on cdf plot in rr on terrestrial
+// increasing font, remove title.

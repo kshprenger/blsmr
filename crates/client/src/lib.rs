@@ -14,12 +14,16 @@ pub struct Command {
 
 pub fn create_cmd(rng: &mut impl Rng, key_count: usize) -> Command {
     use dscale::rand::prelude::IteratorRandom;
+    create_cmd_for_key((0..key_count).choose(rng).expect("choose failed"))
+}
+
+pub fn create_cmd_for_key(key: usize) -> Command {
     Command {
         id: CmdId {
             pid: dscale::pid(),
             id: dscale::unique_id(),
         },
-        key: (0..key_count).choose(rng).expect("choose failed"),
+        key,
     }
 }
 

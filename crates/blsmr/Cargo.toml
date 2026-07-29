@@ -8,3 +8,4 @@ dscale = {workspace = true}
 client = {path = "../client"}
 quorum = {path = "../quorum"}
 rustc-hash = "2.1.2"
+rand_distr = "0.6.0"

@@ -6,9 +6,11 @@ use dscale::{
     rand::{SeedableRng, distr::Uniform, prelude::Distribution, rngs::SmallRng},
     services::kv,
 };
+use rand_distr::Zipf;
 
 use crate::{
-    KEY_KEY_COUNT, KEY_SUBMIT_INTERVAL, KEY_SUBMIT_LIMIT, KEY_TRACK_CONFLICT_RATE, POOL_BLSMR,
+    KEY_KEY_COUNT, KEY_SUBMIT_INTERVAL, KEY_SUBMIT_LIMIT, KEY_TRACK_CONFLICT_RATE,
+    KEY_ZIPF_EXPONENT, POOL_BLSMR,
     dds::{self, Announce, AnnounceStatus, Commit, DDS},
     log,
     quorum::{Quorum, QuorumMsg, QuorumStatus},
@@ -20,6 +22,7 @@ pub struct BLSMR {
     submit_limit: usize,
     submitted: usize,
     key_count: usize,
+    key_zipf: Option<Zipf<f64>>,
     current_submit_timer_id: dscale::TimerId,
     track_conflict_rate: bool,
     dds: DDS,
@@ -28,12 +31,16 @@ pub struct BLSMR {
 
 impl Default for BLSMR {
     fn default() -> Self {
+        let key_count = kv::get::<usize>(KEY_KEY_COUNT);
         Self {
             rng: SmallRng::seed_from_u64(kv::seed()),
             submit_interval: kv::get::<Jiffies>(KEY_SUBMIT_INTERVAL),
             submit_limit: kv::get(KEY_SUBMIT_LIMIT),
             submitted: 0,
-            key_count: kv::get::<usize>(KEY_KEY_COUNT),
+            key_count,
+            key_zipf: kv::get::<Option<f64>>(KEY_ZIPF_EXPONENT).map(|exponent| {
+                Zipf::new(key_count as f64, exponent).expect("invalid Zipf distribution")
+            }),
             current_submit_timer_id: 0,
             track_conflict_rate: kv::get(KEY_TRACK_CONFLICT_RATE),
             dds: DDS::default(),
@@ -67,7 +74,10 @@ impl dscale::Process for BLSMR {
             let status = self.dds.on_timer(id);
             self.handle_announce_status(status);
         } else if id == self.current_submit_timer_id {
-            let cmd = client::create_cmd(&mut self.rng, self.key_count);
+            let cmd = match self.key_zipf {
+                Some(zipf) => client::create_cmd_for_key(zipf.sample(&mut self.rng) as usize - 1),
+                None => client::create_cmd(&mut self.rng, self.key_count),
+            };
             if self.track_conflict_rate {
                 log::record_arrival(cmd.id, cmd.key);
             }
