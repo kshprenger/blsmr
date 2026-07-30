@@ -2,6 +2,7 @@
 import csv
 import sys
 from pathlib import Path
+from statistics import median
 
 import matplotlib.pyplot as plt
 
@@ -66,11 +67,22 @@ def print_slow_path_summary(paths):
             command for command in affected if commands[command]["fast"]
         }
         print(
-            f"{topology} Wintermute slow-path rate: "
+            f"{topology} Wintermute fast-path rate: "
+            f"{100 * (len(commands) - len(direct_slow)) / len(commands):.2f}%, "
+            f"slow-path rate: "
             f"{100 * len(affected) / len(commands):.2f}%, "
             f"chaining-effect rate: {100 * len(chained) / len(commands):.2f}% "
             f"({len(chained)} commands)"
         )
+
+
+def print_terrestrial_medians(samples):
+    for (topology, protocol), values in samples.items():
+        if topology == "terrestrial":
+            print(
+                f"terrestrial {protocol} median latency: "
+                f"{median(values):.2f} jiffies"
+            )
 
 
 def main():
@@ -82,8 +94,9 @@ def main():
     if not path_records_path.exists():
         raise SystemExit(
             f"no path records found in {path_records_path!r} — rerun the CDF simulation"
-        )
+    )
     print_slow_path_summary(load_paths(path_records_path))
+    print_terrestrial_medians(samples)
 
     fig, axes = plt.subplots(len(TOPOLOGIES), 1, figsize=(8, 9), dpi=150, sharey=True)
     for index, (ax, topology) in enumerate(zip(axes, TOPOLOGIES)):
