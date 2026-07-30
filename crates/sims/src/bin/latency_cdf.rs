@@ -49,6 +49,10 @@ fn csv_path() -> PathBuf {
     PathBuf::from("crates/sims/src/bin/latency_cdf/latency_cdf.csv")
 }
 
+fn path_csv_path() -> PathBuf {
+    PathBuf::from("crates/sims/src/bin/latency_cdf/wintermute_paths.csv")
+}
+
 fn builder() -> SimulationBuilder {
     SimulationBuilder::new()
         .default_bandwidth(BandwidthConfig::Unbounded)
@@ -173,7 +177,7 @@ fn run_blsmr(
     protocol: BLSMRProtocol,
     replicas: usize,
     uniform_pool: &'static str,
-) -> (Vec<Jiffies>, f64, f64) {
+) -> (Vec<Jiffies>, f64, f64, Vec<log::PathRecord>) {
     let regions = terrestrial_regions(replicas);
     let mut simulation = match topology {
         NetworkTopology::Uniform => uniform_builder::<BLSMR>(uniform_pool, replicas),
@@ -206,6 +210,7 @@ fn run_blsmr(
         kv::get(KEY_COMMIT_LATENCIES),
         log::conflict_rate_percentage(),
         log::fast_path_percentage(),
+        log::path_records(),
     )
 }
 
@@ -221,10 +226,53 @@ fn write_samples(
     }
 }
 
+fn write_path_records(file: &mut File, topology: NetworkTopology, records: Vec<log::PathRecord>) {
+    for record in records {
+        let decided = record.deps.is_some();
+        match record.deps.as_deref() {
+            Some(deps) if !deps.is_empty() => {
+                for dep in deps {
+                    writeln!(
+                        file,
+                        "{},{},{},{},{},{},{}",
+                        topology.name(),
+                        record.cmd_id.pid,
+                        record.cmd_id.id,
+                        record.fast,
+                        decided,
+                        dep.pid,
+                        dep.id
+                    )
+                    .expect("failed to write path record");
+                }
+            }
+            _ => {
+                writeln!(
+                    file,
+                    "{},{},{},{},{decided},,",
+                    topology.name(),
+                    record.cmd_id.pid,
+                    record.cmd_id.id,
+                    record.fast
+                )
+                .expect("failed to write path record");
+            }
+        }
+    }
+}
+
 fn main() {
     let path = csv_path();
+    let path_records_path = path_csv_path();
     let mut file = File::create(&path).expect("failed to create results file");
+    let mut path_file =
+        File::create(&path_records_path).expect("failed to create path results file");
     writeln!(file, "topology,protocol,latency_jiffies").expect("failed to write header");
+    writeln!(
+        path_file,
+        "topology,command_pid,command_id,direct_fast,decided,dependency_pid,dependency_id"
+    )
+    .expect("failed to write path header");
     for topology in [NetworkTopology::Uniform, NetworkTopology::Terrestrial] {
         write_samples(
             &mut file,
@@ -239,16 +287,18 @@ fn main() {
             run_hotstuff::<NonRotatingHotstuff>(topology, "hotstuff_star_uniform"),
         );
         write_samples(&mut file, topology, "Bullshark", run_bullshark(topology));
-        let (three_jane, _, _) =
+        let (three_jane, _, _, _) =
             run_blsmr(topology, BLSMRProtocol::ThreeJane, 25, "three_jane_uniform");
         write_samples(&mut file, topology, "3Jane", three_jane);
-        let (wintermute, conflict_rate, fast_path_rate) =
+        let (wintermute, conflict_rate, fast_path_rate, path_records) =
             run_blsmr(topology, BLSMRProtocol::Wintermute, 6, "wintermute_uniform");
         write_samples(&mut file, topology, "Wintermute", wintermute);
+        write_path_records(&mut path_file, topology, path_records);
         println!(
             "{} Wintermute conflict rate: {conflict_rate:.2}%, fast path rate: {fast_path_rate:.2}%",
             topology.name()
         );
     }
     println!("wrote {}", path.display());
+    println!("wrote {}", path_records_path.display());
 }

@@ -24,11 +24,66 @@ def load_samples(path):
     return samples
 
 
+def load_paths(path):
+    paths = {}
+    with open(path, newline="") as f:
+        for row in csv.DictReader(f):
+            command = (int(row["command_pid"]), int(row["command_id"]))
+            record = paths.setdefault(row["topology"], {}).setdefault(
+                command,
+                {
+                    "fast": row["direct_fast"] == "true",
+                    "decided": row["decided"] == "true",
+                    "deps": set(),
+                },
+            )
+            if row["dependency_pid"]:
+                record["deps"].add(
+                    (int(row["dependency_pid"]), int(row["dependency_id"]))
+                )
+    return paths
+
+
+def print_slow_path_summary(paths):
+    for topology in TOPOLOGIES:
+        commands = paths.get(topology, {})
+        if not commands:
+            continue
+        direct_slow = {
+            command for command, record in commands.items() if not record["fast"]
+        }
+        affected = set(direct_slow)
+        while True:
+            previous = len(affected)
+            affected.update(
+                command
+                for command, record in commands.items()
+                if record["deps"] & affected
+            )
+            if len(affected) == previous:
+                break
+        chained = {
+            command for command in affected if commands[command]["fast"]
+        }
+        print(
+            f"{topology} Wintermute slow-path rate: "
+            f"{100 * len(affected) / len(commands):.2f}%, "
+            f"chaining-effect rate: {100 * len(chained) / len(commands):.2f}% "
+            f"({len(chained)} commands)"
+        )
+
+
 def main():
     path = Path(sys.argv[1]) if len(sys.argv) > 1 else Path(__file__).parent / "latency_cdf" / "latency_cdf.csv"
+    path_records_path = Path(sys.argv[2]) if len(sys.argv) > 2 else path.with_name("wintermute_paths.csv")
     samples = load_samples(path)
     if not samples:
         raise SystemExit(f"no samples found in {path!r}")
+    if not path_records_path.exists():
+        raise SystemExit(
+            f"no path records found in {path_records_path!r} — rerun the CDF simulation"
+        )
+    print_slow_path_summary(load_paths(path_records_path))
 
     fig, axes = plt.subplots(len(TOPOLOGIES), 1, figsize=(8, 9), dpi=150, sharey=True)
     for index, (ax, topology) in enumerate(zip(axes, TOPOLOGIES)):

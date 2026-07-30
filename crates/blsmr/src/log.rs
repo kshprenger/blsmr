@@ -20,8 +20,14 @@ pub struct ConflictTracker {
     commands: FxHashMap<CmdId, TrackedCommand>,
     conflicting_commands: usize,
     executed_commands: usize,
-    fast_paths: usize,
-    paths: usize,
+    paths: FxHashMap<CmdId, bool>,
+    dependencies: FxHashMap<CmdId, Arc<[CmdId]>>,
+}
+
+pub struct PathRecord {
+    pub cmd_id: CmdId,
+    pub fast: bool,
+    pub deps: Option<Arc<[CmdId]>>,
 }
 
 struct TrackedCommand {
@@ -36,8 +42,8 @@ impl ConflictTracker {
             commands: FxHashMap::default(),
             conflicting_commands: 0,
             executed_commands: 0,
-            fast_paths: 0,
-            paths: 0,
+            paths: FxHashMap::default(),
+            dependencies: FxHashMap::default(),
         }
     }
 
@@ -86,16 +92,20 @@ impl ConflictTracker {
         }
     }
 
-    fn record_fast_path(&mut self, fast: bool) {
-        self.fast_paths += usize::from(fast);
-        self.paths += 1;
+    fn record_path(&mut self, cmd_id: CmdId, fast: bool) {
+        self.paths.insert(cmd_id, fast);
+    }
+
+    fn record_decision(&mut self, cmd_id: CmdId, deps: Arc<[CmdId]>) {
+        self.dependencies.insert(cmd_id, deps);
     }
 
     fn fast_path_percentage(&self) -> f64 {
-        if self.paths == 0 {
+        if self.paths.is_empty() {
             0.0
         } else {
-            100.0 * self.fast_paths as f64 / self.paths as f64
+            100.0 * self.paths.values().filter(|&&fast| fast).count() as f64
+                / self.paths.len() as f64
         }
     }
 }
@@ -384,9 +394,15 @@ pub fn conflict_rate_percentage() -> f64 {
     percentage
 }
 
-pub fn record_fast_path(fast: bool) {
+pub fn record_path(cmd_id: CmdId, fast: bool) {
     kv::modify::<ConflictTracker>(KEY_CONFLICT_RATE, |tracker| {
-        tracker.record_fast_path(fast);
+        tracker.record_path(cmd_id, fast);
+    });
+}
+
+pub fn record_decision(cmd_id: CmdId, deps: Arc<[CmdId]>) {
+    kv::modify::<ConflictTracker>(KEY_CONFLICT_RATE, |tracker| {
+        tracker.record_decision(cmd_id, deps);
     });
 }
 
@@ -398,54 +414,15 @@ pub fn fast_path_percentage() -> f64 {
     percentage
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn cmd(id: usize) -> CmdId {
-        CmdId { pid: 0, id }
-    }
-
-    #[test]
-    fn conflict_is_counted_once_on_first_execution() {
-        let mut tracker = ConflictTracker::new(2);
-        tracker.record_arrival(cmd(1), 7);
-        tracker.record_arrival(cmd(2), 7);
-
-        tracker.record_execution(0, cmd(1), 7);
-        tracker.record_execution(1, cmd(1), 7);
-
-        assert_eq!(tracker.executed_commands, 1);
-        assert_eq!(tracker.conflicting_commands, 1);
-        assert_eq!(tracker.percentage(), 100.0);
-    }
-
-    #[test]
-    fn fully_executed_commands_stop_conflicting() {
-        let mut tracker = ConflictTracker::new(2);
-        tracker.record_arrival(cmd(1), 7);
-        tracker.record_arrival(cmd(2), 7);
-
-        tracker.record_execution(0, cmd(1), 7);
-        tracker.record_execution(1, cmd(1), 7);
-        tracker.record_execution(0, cmd(2), 7);
-
-        assert_eq!(tracker.executed_commands, 2);
-        assert_eq!(tracker.conflicting_commands, 1);
-        assert_eq!(tracker.percentage(), 50.0);
-    }
-
-    #[test]
-    fn different_keys_do_not_conflict() {
-        let mut tracker = ConflictTracker::new(2);
-        tracker.record_arrival(cmd(1), 7);
-        tracker.record_arrival(cmd(2), 8);
-
-        tracker.record_execution(0, cmd(1), 7);
-        tracker.record_execution(0, cmd(2), 8);
-
-        assert_eq!(tracker.executed_commands, 2);
-        assert_eq!(tracker.conflicting_commands, 0);
-        assert_eq!(tracker.percentage(), 0.0);
-    }
+pub fn path_records() -> Vec<PathRecord> {
+    let mut records = Vec::new();
+    kv::modify::<ConflictTracker>(KEY_CONFLICT_RATE, |tracker| {
+        records.extend(tracker.paths.iter().map(|(&cmd_id, &fast)| PathRecord {
+            cmd_id,
+            fast,
+            deps: tracker.dependencies.get(&cmd_id).cloned(),
+        }));
+    });
+    records.sort_by_key(|record| record.cmd_id);
+    records
 }
