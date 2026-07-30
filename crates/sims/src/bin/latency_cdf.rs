@@ -101,9 +101,10 @@ fn terrestrial_regions(replicas: usize) -> Vec<Region> {
 
 fn terrestrial_builder<P: Process + Default + Send + 'static>(
     regions: &[Region],
+    replicas: usize,
 ) -> SimulationBuilder {
     let mut simulation = builder();
-    for region in regions {
+    for region in regions.iter().cycle().take(replicas) {
         simulation = simulation.add_pool::<P>(&region.name, 1);
     }
     for region in regions {
@@ -139,7 +140,7 @@ fn run_hotstuff<P: Process + Default + Send + 'static>(
     let regions = terrestrial_regions(4);
     let mut simulation = match topology {
         NetworkTopology::Uniform => uniform_builder::<P>(uniform_pool, 4),
-        NetworkTopology::Terrestrial => terrestrial_builder::<P>(&regions),
+        NetworkTopology::Terrestrial => terrestrial_builder::<P>(&regions, 4),
     }
     .build();
     kv::set(
@@ -159,7 +160,7 @@ fn run_bullshark(topology: NetworkTopology) -> Vec<Jiffies> {
     let regions = terrestrial_regions(4);
     let mut simulation = match topology {
         NetworkTopology::Uniform => uniform_builder::<Bullshark>("bullshark_uniform", 4),
-        NetworkTopology::Terrestrial => terrestrial_builder::<Bullshark>(&regions),
+        NetworkTopology::Terrestrial => terrestrial_builder::<Bullshark>(&regions, 4),
     }
     .build();
     kv::set::<Vec<Jiffies>>(BULLSHARK_LATENCIES, Vec::new());
@@ -176,7 +177,7 @@ fn run_blsmr(
     let regions = terrestrial_regions(replicas);
     let mut simulation = match topology {
         NetworkTopology::Uniform => uniform_builder::<BLSMR>(uniform_pool, replicas),
-        NetworkTopology::Terrestrial => terrestrial_builder::<BLSMR>(&regions),
+        NetworkTopology::Terrestrial => terrestrial_builder::<BLSMR>(&regions, replicas),
     }
     .build();
     let quorum_system = match &protocol {
@@ -234,12 +235,12 @@ fn main() {
         write_samples(
             &mut file,
             topology,
-            "Hotstuff*",
+            "HotStuff*",
             run_hotstuff::<NonRotatingHotstuff>(topology, "hotstuff_star_uniform"),
         );
         write_samples(&mut file, topology, "Bullshark", run_bullshark(topology));
         let (three_jane, _, _) =
-            run_blsmr(topology, BLSMRProtocol::ThreeJane, 4, "three_jane_uniform");
+            run_blsmr(topology, BLSMRProtocol::ThreeJane, 25, "three_jane_uniform");
         write_samples(&mut file, topology, "3Jane", three_jane);
         let (wintermute, conflict_rate, fast_path_rate) =
             run_blsmr(topology, BLSMRProtocol::Wintermute, 6, "wintermute_uniform");
@@ -251,6 +252,3 @@ fn main() {
     }
     println!("wrote {}", path.display());
 }
-
-// 25 nodes for 3Jane on cdf plot in rr on terrestrial
-// increasing font, remove title.

@@ -6,10 +6,10 @@ from pathlib import Path
 
 import matplotlib.pyplot as plt
 
-from plot_colors import PROTOCOL_COLORS
+from plot_style import PLOT_STYLE, PROTOCOL_COLORS, save_svg
 
-PROTOCOLS = ("Bullshark", "3Jane", "3Jane*", "Wintermute", "HotStuff")
-LINESTYLES = {"3Jane*": "--"}
+PROTOCOLS = ("Bullshark", "3Jane*", "Wintermute", "HotStuff")
+plt.rcParams.update(PLOT_STYLE)
 
 
 def main():
@@ -39,15 +39,13 @@ def main():
             nodes,
             loads,
             yerr=deviations,
-            label=protocol,
+            label=protocol.removesuffix("*"),
             color=PROTOCOL_COLORS[protocol],
-            linestyle=LINESTYLES.get(protocol, "-"),
             linewidth=2,
             marker="o",
             capsize=3,
         )
 
-    ax.set_title("Protocol message-processing cost")
     ax.set_xlabel("nodes")
     ax.set_ylabel("on_message calls per committed unit")
     ax.set_xscale("log", base=2)
@@ -56,9 +54,9 @@ def main():
     ax.set_xticks([2**power for power in range(1, 12)])
     ax.get_xaxis().set_major_formatter(plt.ScalarFormatter())
     ax.grid(True, color="#e1e0d9", linewidth=0.8)
-    ax.legend()
+    ax.legend(loc="upper left", bbox_to_anchor=(1.02, 1), borderaxespad=0)
     fig.tight_layout()
-    plt.show()
+    save_svg(fig, __file__)
 
 
 if __name__ == "__main__":

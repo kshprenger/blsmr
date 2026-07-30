@@ -4,8 +4,10 @@ from pathlib import Path
 
 import matplotlib.pyplot as plt
 
+from plot_style import PLOT_STYLE, save_svg
 
 DATA_PATH = Path(__file__).parent / "latency_cdf" / "aws_regions.csv"
+plt.rcParams.update(PLOT_STYLE)
 
 
 def load_regions():
@@ -40,14 +42,13 @@ def main():
             (float(region["longitude"]), float(region["latitude"])),
             xytext=(6, 6),
             textcoords="offset points",
-            fontsize=8,
+            fontsize="small",
         )
 
-    ax.set_title("Terrestrial AWS Region topology")
     ax.set_xlabel("longitude")
     ax.set_ylabel("latitude")
     fig.tight_layout()
-    plt.show()
+    save_svg(fig, __file__)
 
 
 if __name__ == "__main__":

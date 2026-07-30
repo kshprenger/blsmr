@@ -7,16 +7,16 @@ from statistics import fmean, stdev
 
 import matplotlib.pyplot as plt
 
-from plot_colors import PROTOCOL_COLORS
+from plot_style import PLOT_STYLE, PROTOCOL_COLORS, save_svg
 
-SURFACE = "#fcfcfb"
+SURFACE = "#ffffff"
 MARKER = PROTOCOL_COLORS["Wintermute"]
 FAST_PATH = "#46855c"
 GRIDLINE = "#e1e0d9"
 BASELINE = "#c3c2b7"
 MUTED = "#898781"
-PRIMARY_INK = "#0b0b0b"
 SECONDARY_INK = "#52514e"
+plt.rcParams.update(PLOT_STYLE)
 
 
 def load_rows(pattern):
@@ -100,10 +100,9 @@ def main():
         zorder=2,
     )
 
-    # ax.set_title("Wintermute: commit latency vs. command conflict rate", color=PRIMARY_INK, fontsize=13, pad=12)
-    ax.set_xlabel("conflicting-command rate (%)", color=SECONDARY_INK, fontsize=10)
-    ax.set_ylabel("average commit latency (jiffies)", color=MARKER, fontsize=10)
-    fast_path_ax.set_ylabel("fast-path rate (%)", color=FAST_PATH, fontsize=10)
+    ax.set_xlabel("conflicting-command rate (%)", color=SECONDARY_INK)
+    ax.set_ylabel("average commit latency (jiffies)", color=MARKER)
+    fast_path_ax.set_ylabel("fast-path rate (%)", color=FAST_PATH)
     ax.set_xlim(0, 100)
     ax.set_ylim(bottom=0)
     fast_path_ax.set_ylim(0, 100)
@@ -112,9 +111,9 @@ def main():
     fast_path_ax.spines["right"].set_color(FAST_PATH)
     for spine in ("left", "bottom"):
         ax.spines[spine].set_color(BASELINE)
-    ax.tick_params(axis="x", colors=MUTED, labelsize=9)
-    ax.tick_params(axis="y", colors=MARKER, labelsize=9)
-    fast_path_ax.tick_params(axis="y", colors=FAST_PATH, labelsize=9)
+    ax.tick_params(axis="x", colors=MUTED)
+    ax.tick_params(axis="y", colors=MARKER)
+    fast_path_ax.tick_params(axis="y", colors=FAST_PATH)
     ax.legend(
         [latency_line, fast_path_line],
         ["Commit latency", "Fast-path rate"],
@@ -122,7 +121,7 @@ def main():
     )
 
     fig.tight_layout()
-    plt.show()
+    save_svg(fig, __file__)
 
 
 if __name__ == "__main__":
