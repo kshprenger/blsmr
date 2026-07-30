@@ -6,6 +6,7 @@ from pathlib import Path
 from statistics import fmean, stdev
 
 import matplotlib.pyplot as plt
+import numpy as np
 
 from plot_style import PLOT_STYLE, PROTOCOL_COLORS, save_svg
 
@@ -59,6 +60,8 @@ def main():
 
     points = summarize(rows)
     conflict_pct, conflict_deviation, latency, latency_deviation, fast_path_pct, fast_path_deviation = map(list, zip(*points))
+    pearson = np.corrcoef(latency, fast_path_pct)[0, 1]
+    print(f"commit latency versus fast-path rate Pearson correlation: {pearson:.4f}")
 
     fig, ax = plt.subplots(figsize=(7, 4), dpi=150)
     fast_path_ax = ax.twinx()
