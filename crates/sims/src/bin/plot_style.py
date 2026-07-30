@@ -18,7 +18,7 @@ PROTOCOL_COLORS = {
 }
 
 
-def save_svg(fig, script):
+def save_svg(fig, script, crop=True):
     path = Path(script).with_suffix(".svg")
-    fig.savefig(path, bbox_inches="tight")
+    fig.savefig(path, bbox_inches="tight" if crop else None)
     print(f"wrote {path}")

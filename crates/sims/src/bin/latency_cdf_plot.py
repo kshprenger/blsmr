@@ -115,7 +115,7 @@ def main():
                 linewidth=2,
             )
         ax.set_xlabel("latency (jiffies)")
-        ax.set_ylabel("cumulative fraction")
+        ax.set_ylabel("CDF")
         ax.set_xlim(left=0)
         ax.set_ylim(0, 1)
         ax.grid(True, color="#e1e0d9", linewidth=0.8)
@@ -131,7 +131,7 @@ def main():
     handles, labels = axes[0].get_legend_handles_labels()
     fig.legend(handles, labels, loc="upper left", bbox_to_anchor=(0.77, 0.98))
     fig.tight_layout(rect=(0, 0, 0.76, 1))
-    save_svg(fig, __file__)
+    save_svg(fig, __file__, crop=False)
 
 
 if __name__ == "__main__":

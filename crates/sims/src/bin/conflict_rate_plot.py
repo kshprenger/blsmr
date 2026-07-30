@@ -60,7 +60,7 @@ def main():
     points = summarize(rows)
     conflict_pct, conflict_deviation, latency, latency_deviation, fast_path_pct, fast_path_deviation = map(list, zip(*points))
 
-    fig, ax = plt.subplots(figsize=(7, 5), dpi=150)
+    fig, ax = plt.subplots(figsize=(7, 4), dpi=150)
     fast_path_ax = ax.twinx()
     fig.patch.set_facecolor(SURFACE)
     ax.set_facecolor(SURFACE)
@@ -100,7 +100,7 @@ def main():
         zorder=2,
     )
 
-    ax.set_xlabel("conflicting-command rate (%)", color=SECONDARY_INK)
+    ax.set_xlabel("conflict rate (%)", color=SECONDARY_INK)
     ax.set_ylabel("average commit latency (jiffies)", color=MARKER)
     fast_path_ax.set_ylabel("fast-path rate (%)", color=FAST_PATH)
     ax.set_xlim(0, 100)
@@ -120,8 +120,8 @@ def main():
         loc="upper center",
     )
 
-    fig.tight_layout()
-    save_svg(fig, __file__)
+    fig.tight_layout(rect=(0, 0, 0.88, 1))
+    save_svg(fig, __file__, crop=False)
 
 
 if __name__ == "__main__":
