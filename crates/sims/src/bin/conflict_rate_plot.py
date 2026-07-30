@@ -15,7 +15,6 @@ MARKER = PROTOCOL_COLORS["Wintermute"]
 FAST_PATH = "#46855c"
 GRIDLINE = "#e1e0d9"
 BASELINE = "#c3c2b7"
-MUTED = "#898781"
 SECONDARY_INK = "#52514e"
 plt.rcParams.update(PLOT_STYLE)
 
@@ -104,7 +103,7 @@ def main():
     )
 
     ax.set_xlabel("conflict rate (%)", color=SECONDARY_INK)
-    ax.set_ylabel("average commit latency (jiffies)", color=MARKER)
+    ax.set_ylabel("average latency (jiffies)", color=MARKER)
     fast_path_ax.set_ylabel("fast-path rate (%)", color=FAST_PATH)
     ax.set_xlim(0, 100)
     ax.set_ylim(bottom=0)
@@ -114,9 +113,9 @@ def main():
     fast_path_ax.spines["right"].set_color(FAST_PATH)
     for spine in ("left", "bottom"):
         ax.spines[spine].set_color(BASELINE)
-    ax.tick_params(axis="x", colors=MUTED)
-    ax.tick_params(axis="y", colors=MARKER)
-    fast_path_ax.tick_params(axis="y", colors=FAST_PATH)
+    ax.tick_params(axis="x", colors="#000000")
+    ax.tick_params(axis="y", colors="#000000")
+    fast_path_ax.tick_params(axis="y", colors="#000000")
     ax.legend(
         [latency_line, fast_path_line],
         ["Commit latency", "Fast-path rate"],
