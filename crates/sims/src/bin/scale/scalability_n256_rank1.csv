@@ -1,2 +1,2 @@
-protocol,nodes,on_message_calls_per_committed_unit,standard_deviation
-Wintermute,256,3.002706,0.037168
+protocol,nodes,on_message_calls_per_committed_unit,standard_deviation,average_commit_latency_jiffies
+Wintermute,256,3.002514,0.036433,200.000000

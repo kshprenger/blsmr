@@ -1,2 +1,2 @@
-protocol,nodes,on_message_calls_per_committed_unit,standard_deviation
-HotStuff,16,2.000205,0.000314
+protocol,nodes,on_message_calls_per_committed_unit,standard_deviation,average_commit_latency_jiffies
+HotStuff,16,2.000203,0.000315,606.250000

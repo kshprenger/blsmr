@@ -1,2 +1,2 @@
-protocol,nodes,on_message_calls_per_committed_unit,standard_deviation
-3Jane*,2025,1.465324,0.009509
+protocol,nodes,on_message_calls_per_committed_unit,standard_deviation,average_commit_latency_jiffies
+3Jane*,2025,1.465595,0.009600,412.831934

@@ -15,7 +15,7 @@ MARKER = PROTOCOL_COLORS["Wintermute"]
 FAST_PATH = "#46855c"
 GRIDLINE = "#e1e0d9"
 BASELINE = "#c3c2b7"
-SECONDARY_INK = "#52514e"
+SECONDARY_INK = "#000000"
 plt.rcParams.update(PLOT_STYLE)
 
 
