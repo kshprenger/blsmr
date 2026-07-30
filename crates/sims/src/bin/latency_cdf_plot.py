@@ -5,14 +5,9 @@ from pathlib import Path
 
 import matplotlib.pyplot as plt
 
+from plot_colors import PROTOCOL_COLORS
 
-COLORS = {
-    "HotStuff": "#2a78d6",
-    "Hotstuff*": "#d99a2b",
-    "Bullshark": "#b65331",
-    "3Jane": "#46855c",
-    "Wintermute": "#7a5ca8",
-}
+PROTOCOLS = ("HotStuff", "Hotstuff*", "Bullshark", "3Jane", "Wintermute")
 LINESTYLES = {"Hotstuff*": "--", "3Jane": ":"}
 TOPOLOGIES = ("uniform", "terrestrial")
 
@@ -34,7 +29,7 @@ def main():
 
     fig, axes = plt.subplots(1, len(TOPOLOGIES), figsize=(12, 5), dpi=150, sharey=True)
     for ax, topology in zip(axes, TOPOLOGIES):
-        for protocol in COLORS:
+        for protocol in PROTOCOLS:
             values = sorted(samples.get((topology, protocol), []))
             if not values:
                 continue
@@ -44,7 +39,7 @@ def main():
                 cdf,
                 where="post",
                 label=protocol,
-                color=COLORS[protocol],
+                color=PROTOCOL_COLORS[protocol],
                 linestyle=LINESTYLES.get(protocol, "-"),
                 linewidth=2,
             )

@@ -252,6 +252,5 @@ fn main() {
     println!("wrote {}", path.display());
 }
 
-// Same colors for protoicols across all charts
 // 25 nodes for 3Jane on cdf plot in rr on terrestrial
 // increasing font, remove title.

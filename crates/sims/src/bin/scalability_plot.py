@@ -6,14 +6,9 @@ from pathlib import Path
 
 import matplotlib.pyplot as plt
 
+from plot_colors import PROTOCOL_COLORS
 
-COLORS = {
-    "Bullshark": "#b65331",
-    "3Jane": "#46855c",
-    "3Jane*": "#46855c",
-    "Wintermute": "#7a5ca8",
-    "HotStuff": "#2a78d6",
-}
+PROTOCOLS = ("Bullshark", "3Jane", "3Jane*", "Wintermute", "HotStuff")
 LINESTYLES = {"3Jane*": "--"}
 
 
@@ -27,7 +22,7 @@ def main():
         raise SystemExit(f"no rows found for pattern {pattern!r}")
 
     fig, ax = plt.subplots(figsize=(8, 5), dpi=150)
-    for protocol, color in COLORS.items():
+    for protocol in PROTOCOLS:
         points = sorted(
             (
                 int(row["nodes"]),
@@ -45,7 +40,7 @@ def main():
             loads,
             yerr=deviations,
             label=protocol,
-            color=color,
+            color=PROTOCOL_COLORS[protocol],
             linestyle=LINESTYLES.get(protocol, "-"),
             linewidth=2,
             marker="o",

@@ -7,8 +7,10 @@ from statistics import fmean, stdev
 
 import matplotlib.pyplot as plt
 
+from plot_colors import PROTOCOL_COLORS
+
 SURFACE = "#fcfcfb"
-MARKER = "#2a78d6"
+MARKER = PROTOCOL_COLORS["Wintermute"]
 FAST_PATH = "#46855c"
 GRIDLINE = "#e1e0d9"
 BASELINE = "#c3c2b7"
