@@ -1,12 +1,12 @@
 use std::{
     collections::VecDeque,
     ops::Index,
-    sync::{Arc, Weak},
+    sync::{Arc, Weak, atomic::Ordering},
 };
 
-use dscale::{Jiffies, Message, Pid, now, pid, services::kv};
+use dscale::{Jiffies, Message, Pid, now, services::kv};
 
-use crate::KEY_LATENCIES;
+use crate::{KEY_LATENCIES, SubmittedCommand};
 
 pub type VertexPtr = Arc<Vertex>;
 type Round = Vec<Option<VertexPtr>>;
@@ -19,8 +19,8 @@ pub fn same_vertex(left: &VertexPtr, right: &VertexPtr) -> bool {
 pub struct Vertex {
     pub round: usize,
     pub source: Pid,
-    pub creation_time: Jiffies,
     pub strong_edges: Vec<Weak<Vertex>>,
+    pub(crate) commands: Arc<[Arc<SubmittedCommand>]>,
 }
 
 impl PartialEq for Vertex {
@@ -90,10 +90,13 @@ impl RoundBasedDAG {
                     continue;
                 }
                 self.ordered[round][edge.source] = true;
-                if pid() == edge.source {
-                    kv::modify::<Vec<Jiffies>>(KEY_LATENCIES, |latencies| {
-                        latencies.push(now() - vertex.creation_time);
-                    });
+                for command in edge.commands.iter() {
+                    if !command.committed.swap(true, Ordering::Relaxed) {
+                        let latency = now() - command.submitted_at;
+                        kv::modify::<Vec<Jiffies>>(KEY_LATENCIES, |latencies| {
+                            latencies.push(latency);
+                        });
+                    }
                 }
                 queue.push_back(edge);
             }

@@ -14,13 +14,20 @@ use blsmr::{
     KEY_KEY_COUNT, KEY_PROTOCOL_TYPE, KEY_QUORUM_SYSTEM, KEY_SUBMIT_INTERVAL, KEY_SUBMIT_LIMIT,
     KEY_TRACK_CONFLICT_RATE, KEY_ZIPF_EXPONENT, POOL_BLSMR, process::BLSMR,
 };
-use bullshark::{Bullshark, KEY_LATENCIES as BULLSHARK_LATENCIES};
+use bullshark::{
+    Bullshark, KEY_LATENCIES as BULLSHARK_LATENCIES,
+    KEY_SUBMIT_INTERVAL as BULLSHARK_SUBMIT_INTERVAL, KEY_SUBMIT_LIMIT as BULLSHARK_SUBMIT_LIMIT,
+};
 use dscale::{
     BandwidthConfig, Distr, Jiffies, MessagePtr, Pid, Process, SimulationBuilder, TimerId, mpi,
     rand::{SeedableRng, rngs::SmallRng, seq::SliceRandom},
     services::kv,
 };
-use hotstuff::{B0, ChainedHotstuff, KEY_LATENCIES as HOTSTUFF_LATENCIES, Node};
+use hotstuff::{
+    B0, ChainedHotstuff, KEY_LATENCIES as HOTSTUFF_LATENCIES,
+    KEY_SUBMIT_INTERVAL as HOTSTUFF_SUBMIT_INTERVAL, KEY_SUBMIT_LIMIT as HOTSTUFF_SUBMIT_LIMIT,
+    Node,
+};
 
 const BASELINE_NODE_COUNTS: [usize; 10] = [4, 8, 16, 32, 64, 128, 256, 512, 1_024, 2_048];
 const WINTERMUTE_NODE_COUNTS: [usize; 10] = [6, 8, 16, 32, 64, 128, 256, 512, 1_024, 2_048];
@@ -254,14 +261,9 @@ fn latency_stats(latencies: &[Jiffies]) -> (f64, f64) {
 
 fn run_hotstuff(nodes: usize) -> (f64, f64, f64, f64) {
     let simulation = simulation::<ChainedHotstuff>(nodes, HOTSTUFF_TIME_BUDGET);
-    kv::set(
-        B0,
-        Arc::new(Node {
-            id: 0,
-            parent: None,
-            height: 0,
-        }),
-    );
+    kv::set(B0, Arc::new(Node::genesis()));
+    kv::set(HOTSTUFF_SUBMIT_INTERVAL, SUBMIT_INTERVAL);
+    kv::set(HOTSTUFF_SUBMIT_LIMIT, usize::MAX);
     kv::set::<Vec<Jiffies>>(HOTSTUFF_LATENCIES, Vec::new());
     measure(simulation, nodes, || {
         let latencies = kv::get::<Vec<Jiffies>>(HOTSTUFF_LATENCIES);
@@ -272,6 +274,8 @@ fn run_hotstuff(nodes: usize) -> (f64, f64, f64, f64) {
 
 fn run_bullshark(nodes: usize) -> (f64, f64, f64, f64) {
     let simulation = simulation::<Bullshark>(nodes, BULLSHARK_TIME_BUDGET);
+    kv::set(BULLSHARK_SUBMIT_INTERVAL, SUBMIT_INTERVAL);
+    kv::set(BULLSHARK_SUBMIT_LIMIT, usize::MAX);
     kv::set::<Vec<Jiffies>>(BULLSHARK_LATENCIES, Vec::new());
     measure(simulation, nodes, || {
         let latencies = kv::get::<Vec<Jiffies>>(BULLSHARK_LATENCIES);

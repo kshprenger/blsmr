@@ -1,11 +1,17 @@
-use std::sync::{Arc, Weak};
+use std::sync::{
+    Arc, Weak,
+    atomic::{AtomicBool, Ordering},
+};
 
+use client::{CmdId, Command};
 use dscale::{helpers::Quorum, services::kv, *};
 use rustc_hash::FxHashMap;
 
 pub const B0: &str = "hotstuff_genesis";
 pub const HOTSTUFF_POOL: &str = dscale::GLOBAL_POOL;
 pub const KEY_LATENCIES: &str = "hotstuff_latencies";
+pub const KEY_SUBMIT_INTERVAL: &str = "submit_interval";
+pub const KEY_SUBMIT_LIMIT: &str = "submit_limit";
 
 type NodeId = usize;
 
@@ -14,16 +20,34 @@ pub struct Node {
     pub id: NodeId,
     pub parent: Option<Weak<Node>>,
     pub height: usize,
+    commands: Arc<[Arc<SubmittedCommand>]>,
 }
 
 impl Node {
+    pub fn genesis() -> Self {
+        Self {
+            id: 0,
+            parent: None,
+            height: 0,
+            commands: Arc::from([]),
+        }
+    }
+
     fn parent(&self) -> Option<Arc<Self>> {
         self.parent.as_ref()?.upgrade()
     }
 }
 
 #[derive(Debug)]
-pub enum HSMessage {
+struct SubmittedCommand {
+    command: Command,
+    submitted_at: Jiffies,
+    committed: AtomicBool,
+}
+
+#[derive(Debug)]
+enum HSMessage {
+    Submit(Arc<SubmittedCommand>),
     Propose(Arc<Node>),
     Vote(Arc<Node>),
 }
@@ -31,8 +55,12 @@ pub enum HSMessage {
 impl Message for HSMessage {}
 
 pub struct Hotstuff<const ROTATING: bool> {
+    submit_interval: Jiffies,
+    submit_limit: usize,
+    submitted: usize,
+    current_submit_timer_id: TimerId,
+    pending_commands: FxHashMap<CmdId, Arc<SubmittedCommand>>,
     pending_quorums: FxHashMap<NodeId, (usize, Quorum<()>)>,
-    observed_at: FxHashMap<NodeId, Jiffies>,
     nodes: FxHashMap<NodeId, Arc<Node>>,
     vheight: usize,
     b_lock: Arc<Node>,
@@ -48,8 +76,12 @@ impl<const ROTATING: bool> Default for Hotstuff<ROTATING> {
         let genesis_node = kv::get::<Arc<Node>>(B0);
         let nodes = FxHashMap::from_iter([(genesis_node.id, genesis_node.clone())]);
         Self {
+            submit_interval: kv::get(KEY_SUBMIT_INTERVAL),
+            submit_limit: kv::get(KEY_SUBMIT_LIMIT),
+            submitted: 0,
+            current_submit_timer_id: 0,
+            pending_commands: FxHashMap::default(),
             pending_quorums: FxHashMap::default(),
-            observed_at: FxHashMap::default(),
             nodes,
             vheight: 0,
             b_lock: genesis_node.clone(),
@@ -61,6 +93,9 @@ impl<const ROTATING: bool> Default for Hotstuff<ROTATING> {
 
 impl<const ROTATING: bool> Process for Hotstuff<ROTATING> {
     fn on_start(&mut self) {
+        if self.submit_limit != 0 {
+            self.schedule_submit();
+        }
         if pid() == 0 {
             broadcast(HSMessage::Propose(self.create_leaf()));
         }
@@ -68,11 +103,18 @@ impl<const ROTATING: bool> Process for Hotstuff<ROTATING> {
 
     fn on_message(&mut self, _from: Pid, message: MessagePtr) {
         match message.as_type::<HSMessage>() {
+            HSMessage::Submit(command) => {
+                self.pending_commands
+                    .entry(command.command.id)
+                    .or_insert_with(|| command.clone());
+            }
             HSMessage::Propose(node) => {
-                self.observed_at.entry(node.id).or_insert_with(now);
                 if node.height > self.vheight
                     && (self.extends(node) || node.height > self.b_lock.height)
                 {
+                    for command in node.commands.iter() {
+                        self.pending_commands.remove(&command.command.id);
+                    }
                     self.nodes.insert(node.id, node.clone());
                     self.vheight = node.height;
                     send(self.next_leader(), HSMessage::Vote(node.clone()));
@@ -97,8 +139,18 @@ impl<const ROTATING: bool> Process for Hotstuff<ROTATING> {
         }
     }
 
-    fn on_timer(&mut self, _id: TimerId) {
-        unreachable!()
+    fn on_timer(&mut self, id: TimerId) {
+        assert_eq!(id, self.current_submit_timer_id, "unknown timer");
+        let command = Arc::new(SubmittedCommand {
+            command: client::create_cmd_for_key(0),
+            submitted_at: now(),
+            committed: AtomicBool::new(false),
+        });
+        broadcast(HSMessage::Submit(command));
+        self.submitted += 1;
+        if self.submitted < self.submit_limit {
+            self.schedule_submit();
+        }
     }
 }
 
@@ -125,12 +177,19 @@ impl<const ROTATING: bool> Hotstuff<ROTATING> {
     fn commit(&mut self, node: Arc<Node>) {
         if self.b_exec.height < node.height {
             self.commit(node.parent().expect("genesis cannot commit"));
-            if let Some(observed_at) = self.observed_at.remove(&node.id) {
-                kv::modify::<Vec<Jiffies>>(KEY_LATENCIES, |latencies| {
-                    latencies.push(now() - observed_at);
-                });
+            for command in node.commands.iter() {
+                if !command.committed.swap(true, Ordering::Relaxed) {
+                    let latency = now() - command.submitted_at;
+                    kv::modify::<Vec<Jiffies>>(KEY_LATENCIES, |latencies| {
+                        latencies.push(latency);
+                    });
+                }
             }
         }
+    }
+
+    fn schedule_submit(&mut self) {
+        self.current_submit_timer_id = schedule_timer_after(self.submit_interval);
     }
 
     fn create_leaf(&mut self) -> Arc<Node> {
@@ -139,8 +198,13 @@ impl<const ROTATING: bool> Hotstuff<ROTATING> {
             id: unique_id(),
             parent: Some(Arc::downgrade(&parent)),
             height: parent.height + 1,
+            commands: self
+                .pending_commands
+                .drain()
+                .map(|(_, command)| command)
+                .collect::<Vec<_>>()
+                .into(),
         });
-        self.observed_at.insert(node.id, now());
         self.nodes.insert(node.id, node.clone());
         node
     }
@@ -150,8 +214,6 @@ impl<const ROTATING: bool> Hotstuff<ROTATING> {
         self.nodes.retain(|_, node| node.height >= committed_height);
         self.pending_quorums
             .retain(|_, (height, _)| *height > committed_height);
-        self.observed_at
-            .retain(|node_id, _| self.nodes.contains_key(node_id));
     }
 
     fn next_leader(&self) -> Pid {

@@ -3,7 +3,7 @@ use std::{hint, sync::Arc};
 use client::CmdId;
 use dscale::{
     Jiffies,
-    rand::{SeedableRng, distr::Uniform, prelude::Distribution, rngs::SmallRng},
+    rand::{SeedableRng, prelude::Distribution, rngs::SmallRng},
     services::kv,
 };
 use rand_distr::Zipf;
@@ -95,10 +95,7 @@ impl dscale::Process for BLSMR {
 
 impl BLSMR {
     fn sched_submit(&mut self) {
-        let delay = Uniform::new_inclusive(self.submit_interval.0 / 2, self.submit_interval.0)
-            .expect("invalid submit interval")
-            .sample(&mut self.rng);
-        self.current_submit_timer_id = dscale::schedule_timer_after(Jiffies(delay));
+        self.current_submit_timer_id = dscale::schedule_timer_after(self.submit_interval);
     }
 
     fn handle_announce_status(&mut self, status: AnnounceStatus) {

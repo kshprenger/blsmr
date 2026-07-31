@@ -3,10 +3,12 @@ mod dag_utils;
 
 use std::{
     collections::BTreeSet,
-    sync::{Arc, Weak},
+    sync::{Arc, Weak, atomic::AtomicBool},
 };
 
+use client::{CmdId, Command};
 use dscale::*;
+use rustc_hash::FxHashMap;
 
 use crate::{
     consistent_broadcast::{BCBMessage, ByzantineConsistentBroadcast},
@@ -15,8 +17,29 @@ use crate::{
 
 pub const BULLSHARK_POOL: &str = dscale::GLOBAL_POOL;
 pub const KEY_LATENCIES: &str = "bullshark_latencies";
+pub const KEY_SUBMIT_INTERVAL: &str = "submit_interval";
+pub const KEY_SUBMIT_LIMIT: &str = "submit_limit";
+
+#[derive(Debug)]
+pub(crate) struct SubmittedCommand {
+    pub(crate) command: Command,
+    pub(crate) submitted_at: Jiffies,
+    pub(crate) committed: AtomicBool,
+}
+
+#[derive(Debug)]
+enum BullsharkMessage {
+    Submit(Arc<SubmittedCommand>),
+}
+
+impl Message for BullsharkMessage {}
 
 pub struct Bullshark {
+    submit_interval: Jiffies,
+    submit_limit: usize,
+    submitted: usize,
+    submit_timer: TimerId,
+    pending_commands: FxHashMap<CmdId, Arc<SubmittedCommand>>,
     rbcast: ByzantineConsistentBroadcast,
     proc_num: usize,
     dag: RoundBasedDAG,
@@ -31,6 +54,11 @@ pub struct Bullshark {
 impl Default for Bullshark {
     fn default() -> Self {
         Self {
+            submit_interval: services::kv::get(KEY_SUBMIT_INTERVAL),
+            submit_limit: services::kv::get(KEY_SUBMIT_LIMIT),
+            submitted: 0,
+            submit_timer: 0,
+            pending_commands: FxHashMap::default(),
             rbcast: ByzantineConsistentBroadcast::default(),
             proc_num: 0,
             dag: RoundBasedDAG::default(),
@@ -46,6 +74,9 @@ impl Default for Bullshark {
 
 impl Process for Bullshark {
     fn on_start(&mut self) {
+        if self.submit_limit != 0 {
+            self.schedule_submit();
+        }
         self.proc_num = list_pool(BULLSHARK_POOL).len();
         self.dag.set_round_size(self.proc_num);
         self.rbcast.on_start(self.proc_num);
@@ -55,12 +86,18 @@ impl Process for Bullshark {
                 round: 0,
                 source: pid(),
                 strong_edges: Vec::new(),
-                creation_time: now(),
+                commands: Arc::from([]),
             })),
         });
     }
 
     fn on_message(&mut self, from: Pid, message: MessagePtr) {
+        if let Some(BullsharkMessage::Submit(command)) = message.try_as_type::<BullsharkMessage>() {
+            self.pending_commands
+                .entry(command.command.id)
+                .or_insert_with(|| command.clone());
+            return;
+        }
         let Some(message) = self
             .rbcast
             .on_message(from, message.as_type::<BCBMessage>())
@@ -75,6 +112,9 @@ impl Process for Bullshark {
             VertexType::Vertex(vertex) => {
                 if self.bad_vertex(vertex, from) {
                     return;
+                }
+                for command in vertex.commands.iter() {
+                    self.pending_commands.remove(&command.command.id);
                 }
                 let mut buffered = self.buffer.iter().cloned().collect::<Vec<_>>();
                 buffered.sort_by_key(|vertex| vertex.round);
@@ -124,7 +164,18 @@ impl Process for Bullshark {
     }
 
     fn on_timer(&mut self, id: TimerId) {
-        if id == self.timer {
+        if id == self.submit_timer {
+            let command = Arc::new(SubmittedCommand {
+                command: client::create_cmd_for_key(0),
+                submitted_at: now(),
+                committed: AtomicBool::new(false),
+            });
+            broadcast(BullsharkMessage::Submit(command));
+            self.submitted += 1;
+            if self.submitted < self.submit_limit {
+                self.schedule_submit();
+            }
+        } else if id == self.timer {
             self.wait = false;
             self.try_advance_round();
         }
@@ -148,7 +199,11 @@ impl Bullshark {
         self.dag[round].iter().flatten().count() >= self.quorum_size()
     }
 
-    fn create_vertex(&self, round: usize) -> VertexPtr {
+    fn schedule_submit(&mut self) {
+        self.submit_timer = schedule_timer_after(self.submit_interval);
+    }
+
+    fn create_vertex(&mut self, round: usize) -> VertexPtr {
         VertexPtr::new(Vertex {
             round,
             source: pid(),
@@ -157,7 +212,12 @@ impl Bullshark {
                 .flatten()
                 .map(Arc::downgrade)
                 .collect::<Vec<Weak<Vertex>>>(),
-            creation_time: now(),
+            commands: self
+                .pending_commands
+                .drain()
+                .map(|(_, command)| command)
+                .collect::<Vec<_>>()
+                .into(),
         })
     }
 
