@@ -80,10 +80,11 @@ Outputs:
 
 ## Scalability
 
-The simulation supports up to 2,048 replicas, except Bullshark, which stops at
-512. 3Jane starts at 25 replicas; its plotted series uses the maximum-fault
-configuration and is labelled `3Jane`. Every protocol uses sequential
-scheduling and uniform 100-jiffy network latency.
+The simulation starts Bullshark and HotStuff at 4 replicas, Wintermute at 6,
+and 3Jane at 25. It supports up to 2,048 replicas, except Bullshark, which
+stops at 512. The plotted 3Jane series uses the maximum-fault configuration
+and is labelled `3Jane`. Every protocol uses sequential scheduling and
+terrestrial latency with round-robin region placement.
 
 Local MPI run:
 
@@ -99,7 +100,7 @@ cargo install cross --git https://github.com/cross-rs/cross
 ssh remote_machine 'mkdir -p "$HOME/blsmr/scale"'
 cross build --release --target x86_64-unknown-linux-musl --bin scalability
 scp target/x86_64-unknown-linux-musl/release/scalability remote_machine:~/blsmr/scale/
-ssh remote_machine 'sbatch -N 19 -n 19 --ntasks-per-node=1 --cpus-per-task=24 --exclusive --distribution=block:block --chdir="$HOME/blsmr/scale" --wrap='"'"'for n in 2 4 8 16 25 32 36 64 121 128 256 512 529 1024 2025 2048; do srun -n 19 --ntasks-per-node=1 --cpus-per-task=24 --distribution=block:block env SCALABILITY_NODES=$n ./scalability; done'"'"''
+ssh remote_machine 'sbatch -N 19 -n 19 --ntasks-per-node=1 --cpus-per-task=24 --exclusive --distribution=block:block --chdir="$HOME/blsmr/scale" --wrap='"'"'for n in 4 6 8 16 25 32 36 64 121 128 256 512 529 1024 2025 2048; do srun -n 19 --ntasks-per-node=1 --cpus-per-task=24 --distribution=block:block env SCALABILITY_NODES=$n ./scalability; done'"'"''
 ```
 
 Retrieve and plot the results:

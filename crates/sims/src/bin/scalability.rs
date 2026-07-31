@@ -17,23 +17,32 @@ use blsmr::{
 use bullshark::{Bullshark, KEY_LATENCIES as BULLSHARK_LATENCIES};
 use dscale::{
     BandwidthConfig, Distr, Jiffies, MessagePtr, Pid, Process, SimulationBuilder, TimerId, mpi,
+    rand::{SeedableRng, rngs::SmallRng, seq::SliceRandom},
     services::kv,
 };
 use hotstuff::{B0, ChainedHotstuff, KEY_LATENCIES as HOTSTUFF_LATENCIES, Node};
 
-const NODE_COUNTS: [usize; 11] = [2, 4, 8, 16, 32, 64, 128, 256, 512, 1_024, 2_048];
+const BASELINE_NODE_COUNTS: [usize; 10] = [4, 8, 16, 32, 64, 128, 256, 512, 1_024, 2_048];
+const WINTERMUTE_NODE_COUNTS: [usize; 10] = [6, 8, 16, 32, 64, 128, 256, 512, 1_024, 2_048];
 const THREE_JANE_NODE_COUNTS: [usize; 8] = [25, 36, 64, 121, 256, 529, 1_024, 2_025];
 const BLSMR_TIME_BUDGET: Jiffies = Jiffies(40_000);
 const HOTSTUFF_TIME_BUDGET: Jiffies = Jiffies(5_000_000);
 const BULLSHARK_TIME_BUDGET: Jiffies = Jiffies(100_000);
-const NETWORK_LATENCY: Jiffies = Jiffies(100);
-const SUBMIT_INTERVAL: Jiffies = Jiffies(2_000);
+const SUBMIT_INTERVAL: Jiffies = Jiffies(55);
 const THREE_JANE_FAULTS: usize = 1;
 const THREE_JANE_ZIPF_EXPONENT: f64 = 0.99;
 const SEED: u64 = 42;
+const EARTH_RADIUS_KM: f64 = 6_371.0;
+const LIGHT_SPEED_KM_PER_SECOND: f64 = 299_792.458;
 const MAX_NODES: usize = 2_048;
 const BULLSHARK_MAX_NODES: usize = 512;
 static MESSAGE_COUNTS: [AtomicUsize; MAX_NODES] = [const { AtomicUsize::new(0) }; MAX_NODES];
+
+struct Region {
+    name: String,
+    latitude: f64,
+    longitude: f64,
+}
 
 struct Measured<P>(P);
 
@@ -86,17 +95,17 @@ struct Config {
 }
 
 fn configs() -> Vec<Config> {
-    NODE_COUNTS
+    BASELINE_NODE_COUNTS
         .into_iter()
         .flat_map(|nodes| {
-            [
-                Protocol::Bullshark,
-                Protocol::Wintermute,
-                Protocol::Hotstuff,
-            ]
-            .into_iter()
-            .map(move |protocol| Config { nodes, protocol })
+            [Protocol::Bullshark, Protocol::Hotstuff]
+                .into_iter()
+                .map(move |protocol| Config { nodes, protocol })
         })
+        .chain(WINTERMUTE_NODE_COUNTS.into_iter().map(|nodes| Config {
+            nodes,
+            protocol: Protocol::Wintermute,
+        }))
         .chain(THREE_JANE_NODE_COUNTS.into_iter().flat_map(|nodes| {
             [Protocol::ThreeJane, Protocol::ThreeJaneMaxFaults]
                 .into_iter()
@@ -122,32 +131,83 @@ fn simulation<P: Process + Default + Send + 'static>(
     nodes: usize,
     time_budget: Jiffies,
 ) -> Box<dyn dscale::SimulationRunner> {
-    SimulationBuilder::new()
-        .add_pool::<Measured<P>>("scalability", nodes)
+    let regions = terrestrial_regions(nodes);
+    let mut builder = SimulationBuilder::new()
         .default_bandwidth(BandwidthConfig::Unbounded)
-        .within_pool_latency(
-            "scalability",
-            Distr::Uniform {
-                low: NETWORK_LATENCY,
-                high: NETWORK_LATENCY,
-            },
-        )
         .time_budget(time_budget)
         .seed(SEED)
-        .seq_sched()
-        .build()
+        .seq_sched();
+    for region in (0..nodes).map(|index| &regions[index % regions.len()]) {
+        builder = builder
+            .add_pool::<Measured<P>>(&region.name, 1)
+            .within_pool_latency(&region.name, fixed_latency(Jiffies(1)));
+    }
+    for (index, from) in regions.iter().enumerate() {
+        for to in &regions[index + 1..] {
+            builder = builder.between_pool_latency(
+                &from.name,
+                &to.name,
+                fixed_latency(light_latency(from, to)),
+            );
+        }
+    }
+    builder.build()
+}
+
+fn terrestrial_regions(nodes: usize) -> Vec<Region> {
+    let mut regions = include_str!("latency_cdf/aws_regions.csv")
+        .lines()
+        .skip(1)
+        .map(|line| {
+            let mut fields = line.split(',');
+            Region {
+                name: fields.next().expect("missing AWS Region ID").to_owned(),
+                latitude: fields
+                    .next()
+                    .expect("missing latitude")
+                    .parse()
+                    .expect("invalid latitude"),
+                longitude: fields
+                    .next()
+                    .expect("missing longitude")
+                    .parse()
+                    .expect("invalid longitude"),
+            }
+        })
+        .collect::<Vec<_>>();
+    regions.shuffle(&mut SmallRng::seed_from_u64(SEED));
+    regions.truncate(nodes);
+    regions
+}
+
+fn fixed_latency(latency: Jiffies) -> Distr {
+    Distr::Uniform {
+        low: latency,
+        high: latency,
+    }
+}
+
+fn light_latency(from: &Region, to: &Region) -> Jiffies {
+    let latitude_delta = (to.latitude - from.latitude).to_radians();
+    let longitude_delta = (to.longitude - from.longitude).to_radians();
+    let from_latitude = from.latitude.to_radians();
+    let to_latitude = to.latitude.to_radians();
+    let half_chord = (latitude_delta / 2.0).sin().powi(2)
+        + from_latitude.cos() * to_latitude.cos() * (longitude_delta / 2.0).sin().powi(2);
+    let distance_km = EARTH_RADIUS_KM * 2.0 * half_chord.sqrt().asin();
+    Jiffies((distance_km / LIGHT_SPEED_KM_PER_SECOND * 1_000.0).ceil() as usize)
 }
 
 fn measure(
     mut simulation: Box<dyn dscale::SimulationRunner>,
     nodes: usize,
-    metrics: impl FnOnce() -> (usize, f64),
-) -> (f64, f64, f64) {
+    metrics: impl FnOnce() -> (usize, f64, f64),
+) -> (f64, f64, f64, f64) {
     for count in &MESSAGE_COUNTS[..nodes] {
         count.store(0, Ordering::Relaxed);
     }
     simulation.run_full_budget();
-    let (committed, average_commit_latency) = metrics();
+    let (committed, average_commit_latency, commit_latency_standard_deviation) = metrics();
     let (load, standard_deviation) = load_stats(
         &MESSAGE_COUNTS[..nodes]
             .iter()
@@ -155,7 +215,12 @@ fn measure(
             .collect::<Vec<_>>(),
         committed,
     );
-    (load, standard_deviation, average_commit_latency)
+    (
+        load,
+        standard_deviation,
+        average_commit_latency,
+        commit_latency_standard_deviation,
+    )
 }
 
 fn load_stats(calls: &[usize], committed: usize) -> (f64, f64) {
@@ -172,15 +237,22 @@ fn load_stats(calls: &[usize], committed: usize) -> (f64, f64) {
     (mean, variance.sqrt())
 }
 
-fn average_latency(latencies: &[Jiffies]) -> f64 {
+fn latency_stats(latencies: &[Jiffies]) -> (f64, f64) {
     if latencies.is_empty() {
-        0.0
+        (0.0, 0.0)
     } else {
-        latencies.iter().map(|latency| latency.0).sum::<usize>() as f64 / latencies.len() as f64
+        let mean = latencies.iter().map(|latency| latency.0).sum::<usize>() as f64
+            / latencies.len() as f64;
+        let variance = latencies
+            .iter()
+            .map(|latency| (latency.0 as f64 - mean).powi(2))
+            .sum::<f64>()
+            / latencies.len() as f64;
+        (mean, variance.sqrt())
     }
 }
 
-fn run_hotstuff(nodes: usize) -> (f64, f64, f64) {
+fn run_hotstuff(nodes: usize) -> (f64, f64, f64, f64) {
     let simulation = simulation::<ChainedHotstuff>(nodes, HOTSTUFF_TIME_BUDGET);
     kv::set(
         B0,
@@ -193,16 +265,18 @@ fn run_hotstuff(nodes: usize) -> (f64, f64, f64) {
     kv::set::<Vec<Jiffies>>(HOTSTUFF_LATENCIES, Vec::new());
     measure(simulation, nodes, || {
         let latencies = kv::get::<Vec<Jiffies>>(HOTSTUFF_LATENCIES);
-        (latencies.len(), average_latency(&latencies))
+        let (average, standard_deviation) = latency_stats(&latencies);
+        (latencies.len(), average, standard_deviation)
     })
 }
 
-fn run_bullshark(nodes: usize) -> (f64, f64, f64) {
+fn run_bullshark(nodes: usize) -> (f64, f64, f64, f64) {
     let simulation = simulation::<Bullshark>(nodes, BULLSHARK_TIME_BUDGET);
     kv::set::<Vec<Jiffies>>(BULLSHARK_LATENCIES, Vec::new());
     measure(simulation, nodes, || {
         let latencies = kv::get::<Vec<Jiffies>>(BULLSHARK_LATENCIES);
-        (latencies.len(), average_latency(&latencies))
+        let (average, standard_deviation) = latency_stats(&latencies);
+        (latencies.len(), average, standard_deviation)
     })
 }
 
@@ -210,7 +284,7 @@ fn run_blsmr(
     nodes: usize,
     protocol: BLSMRProtocol,
     max_three_jane_faults: bool,
-) -> (f64, f64, f64) {
+) -> (f64, f64, f64, f64) {
     let simulation = simulation::<BLSMR>(nodes, BLSMR_TIME_BUDGET);
     let pids = dscale::list_pool(POOL_BLSMR);
     let zipf_exponent =
@@ -236,22 +310,31 @@ fn run_blsmr(
     kv::set::<Vec<Jiffies>>(KEY_COMMIT_LATENCIES, Vec::new());
     measure(simulation, nodes, || {
         let latencies = kv::get::<Vec<Jiffies>>(KEY_COMMIT_LATENCIES);
+        let (average, standard_deviation) = latency_stats(&latencies);
         (
             kv::get::<(usize, usize)>(KEY_AVG_COMMIT_LATENCY).1,
-            average_latency(&latencies),
+            average,
+            standard_deviation,
         )
     })
 }
 
-fn run(config: Config) -> (Config, f64, f64, f64) {
-    let (load, standard_deviation, average_commit_latency) = match config.protocol {
-        Protocol::Bullshark => run_bullshark(config.nodes),
-        Protocol::ThreeJane => run_blsmr(config.nodes, BLSMRProtocol::ThreeJane, false),
-        Protocol::ThreeJaneMaxFaults => run_blsmr(config.nodes, BLSMRProtocol::ThreeJane, true),
-        Protocol::Wintermute => run_blsmr(config.nodes, BLSMRProtocol::Wintermute, false),
-        Protocol::Hotstuff => run_hotstuff(config.nodes),
-    };
-    (config, load, standard_deviation, average_commit_latency)
+fn run(config: Config) -> (Config, f64, f64, f64, f64) {
+    let (load, standard_deviation, average_commit_latency, commit_latency_standard_deviation) =
+        match config.protocol {
+            Protocol::Bullshark => run_bullshark(config.nodes),
+            Protocol::ThreeJane => run_blsmr(config.nodes, BLSMRProtocol::ThreeJane, false),
+            Protocol::ThreeJaneMaxFaults => run_blsmr(config.nodes, BLSMRProtocol::ThreeJane, true),
+            Protocol::Wintermute => run_blsmr(config.nodes, BLSMRProtocol::Wintermute, false),
+            Protocol::Hotstuff => run_hotstuff(config.nodes),
+        };
+    (
+        config,
+        load,
+        standard_deviation,
+        average_commit_latency,
+        commit_latency_standard_deviation,
+    )
 }
 
 fn output_path() -> PathBuf {
@@ -267,13 +350,20 @@ fn main() {
     let mut file = File::create(&path).expect("failed to create results file");
     writeln!(
         file,
-        "protocol,nodes,on_message_calls_per_committed_unit,standard_deviation,average_commit_latency_jiffies"
+        "protocol,nodes,on_message_calls_per_committed_unit,standard_deviation,average_commit_latency_jiffies,commit_latency_standard_deviation_jiffies"
     )
     .expect("failed to write header");
-    for (config, load, standard_deviation, average_commit_latency) in results {
+    for (
+        config,
+        load,
+        standard_deviation,
+        average_commit_latency,
+        commit_latency_standard_deviation,
+    ) in results
+    {
         writeln!(
             file,
-            "{},{},{load:.6},{standard_deviation:.6},{average_commit_latency:.6}",
+            "{},{},{load:.6},{standard_deviation:.6},{average_commit_latency:.6},{commit_latency_standard_deviation:.6}",
             config.protocol.name(),
             config.nodes
         )

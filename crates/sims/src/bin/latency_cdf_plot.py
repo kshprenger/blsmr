@@ -10,7 +10,7 @@ from plot_style import PLOT_STYLE, PROTOCOL_COLORS, save_svg
 
 PROTOCOLS = ("HotStuff", "Bullshark", "3Jane", "Wintermute")
 PROTOCOL_ALIASES = {"Hotstuff*": "HotStuff*"}
-LINESTYLES = {"HotStuff*": "--", "3Jane": ":"}
+LINESTYLES = {"HotStuff*": "--"}
 TOPOLOGIES = ("uniform", "terrestrial")
 plt.rcParams.update(PLOT_STYLE)
 

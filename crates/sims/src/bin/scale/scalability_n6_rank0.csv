@@ -1,2 +1,2 @@
 protocol,nodes,on_message_calls_per_committed_unit,standard_deviation,average_commit_latency_jiffies,commit_latency_standard_deviation_jiffies
-Wintermute,64,2.988869,0.006050,102.740279,13.669715
+Wintermute,6,2.836773,0.004812,89.925013,13.867690

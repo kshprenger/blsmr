@@ -1,2 +1,2 @@
-protocol,nodes,on_message_calls_per_committed_unit,standard_deviation,average_commit_latency_jiffies
-Bullshark,16,57.509332,0.000000,880.773555
+protocol,nodes,on_message_calls_per_committed_unit,standard_deviation,average_commit_latency_jiffies,commit_latency_standard_deviation_jiffies
+Bullshark,16,59.388292,0.005510,343.899035,28.842382
