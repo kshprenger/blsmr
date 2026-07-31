@@ -60,7 +60,7 @@ def main():
     points = summarize(rows)
     conflict_pct, conflict_deviation, latency, latency_deviation, fast_path_pct, fast_path_deviation = map(list, zip(*points))
     pearson = np.corrcoef(latency, fast_path_pct)[0, 1]
-    print(f"commit latency versus fast-path rate Pearson correlation: {pearson:.4f}")
+    print(f"Execution latency versus fast-path rate Pearson correlation: {pearson:.4f}")
 
     fig, ax = plt.subplots(figsize=(7, 4), dpi=150)
     fast_path_ax = ax.twinx()
@@ -81,7 +81,7 @@ def main():
         markeredgewidth=0.5,
         capsize=3,
         elinewidth=1,
-        label="Commit latency",
+        label="Execution latency",
         zorder=3,
     )
     fast_path_line = fast_path_ax.errorbar(
@@ -118,7 +118,7 @@ def main():
     fast_path_ax.tick_params(axis="y", colors="#000000")
     ax.legend(
         [latency_line, fast_path_line],
-        ["Commit latency", "Fast-path rate"],
+        ["Execution latency", "Fast-path rate"],
         loc="upper center",
     )
 
