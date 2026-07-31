@@ -3,7 +3,10 @@ mod dag_utils;
 
 use std::{
     collections::BTreeSet,
-    sync::{Arc, Weak, atomic::AtomicBool},
+    sync::{
+        Arc, Weak,
+        atomic::{AtomicBool, AtomicUsize},
+    },
 };
 
 use client::{CmdId, Command};
@@ -16,6 +19,7 @@ use crate::{
 };
 
 pub const BULLSHARK_POOL: &str = dscale::GLOBAL_POOL;
+pub const KEY_BLOCK_COMMITS: &str = "bullshark_block_commits";
 pub const KEY_LATENCIES: &str = "bullshark_latencies";
 pub const KEY_SUBMIT_INTERVAL: &str = "submit_interval";
 pub const KEY_SUBMIT_LIMIT: &str = "submit_limit";
@@ -34,11 +38,19 @@ enum BullsharkMessage {
 
 impl Message for BullsharkMessage {}
 
+pub fn is_command_submission(message: &MessagePtr) -> bool {
+    matches!(
+        message.try_as_type::<BullsharkMessage>(),
+        Some(BullsharkMessage::Submit(_))
+    )
+}
+
 pub struct Bullshark {
     submit_interval: Jiffies,
     submit_limit: usize,
     submitted: usize,
     submit_timer: TimerId,
+    block_commits: Arc<AtomicUsize>,
     pending_commands: FxHashMap<CmdId, Arc<SubmittedCommand>>,
     rbcast: ByzantineConsistentBroadcast,
     proc_num: usize,
@@ -58,6 +70,7 @@ impl Default for Bullshark {
             submit_limit: services::kv::get(KEY_SUBMIT_LIMIT),
             submitted: 0,
             submit_timer: 0,
+            block_commits: services::kv::get(KEY_BLOCK_COMMITS),
             pending_commands: FxHashMap::default(),
             rbcast: ByzantineConsistentBroadcast::default(),
             proc_num: 0,
@@ -328,7 +341,7 @@ impl Bullshark {
         }
         self.last_ordered_round = vertex.round;
         while let Some(anchor) = self.ordered_anchors.pop() {
-            self.dag.order_from(&anchor);
+            self.dag.order_from(&anchor, &self.block_commits);
         }
         self.dag.gc(self.last_ordered_round);
     }

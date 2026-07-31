@@ -44,16 +44,14 @@ def main():
         )
         if not points:
             continue
-        nodes, loads, load_deviations, latencies, latency_deviations = zip(*points)
-        load_ax.errorbar(
+        nodes, loads, _, latencies, latency_deviations = zip(*points)
+        load_ax.plot(
             nodes,
             loads,
-            yerr=load_deviations,
             label=protocol.removesuffix("*"),
             color=PROTOCOL_COLORS[protocol],
             linewidth=2,
             marker="o",
-            capsize=3,
         )
         latency_ax.errorbar(
             nodes,
@@ -65,11 +63,11 @@ def main():
             capsize=3,
         )
 
-    load_ax.set_ylabel("message per commit event")
+    load_ax.set_ylabel("worst-case messages per commit event")
     latency_ax.set_xlabel("nodes")
     latency_ax.set_ylabel("average latency (jiffies)")
     latency_ax.set_xscale("log", base=2)
-    load_ax.set_yscale("symlog", linthresh=1)
+    # load_ax.set_yscale("symlog", linthresh=1)
     load_ax.set_ylim(bottom=0)
     latency_ax.set_ylim(bottom=0)
     latency_ax.set_xticks([2**power for power in range(1, 12)])

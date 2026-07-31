@@ -15,7 +15,7 @@ use blsmr::{
     KEY_TRACK_CONFLICT_RATE, KEY_ZIPF_EXPONENT, POOL_BLSMR, process::BLSMR,
 };
 use bullshark::{
-    Bullshark, KEY_LATENCIES as BULLSHARK_LATENCIES,
+    Bullshark, KEY_BLOCK_COMMITS as BULLSHARK_BLOCK_COMMITS, KEY_LATENCIES as BULLSHARK_LATENCIES,
     KEY_SUBMIT_INTERVAL as BULLSHARK_SUBMIT_INTERVAL, KEY_SUBMIT_LIMIT as BULLSHARK_SUBMIT_LIMIT,
 };
 use dscale::{
@@ -24,9 +24,9 @@ use dscale::{
     services::kv,
 };
 use hotstuff::{
-    B0, ChainedHotstuff, KEY_LATENCIES as HOTSTUFF_LATENCIES,
-    KEY_SUBMIT_INTERVAL as HOTSTUFF_SUBMIT_INTERVAL, KEY_SUBMIT_LIMIT as HOTSTUFF_SUBMIT_LIMIT,
-    Node,
+    B0, ChainedHotstuff, KEY_BLOCK_COMMITS as HOTSTUFF_BLOCK_COMMITS,
+    KEY_LATENCIES as HOTSTUFF_LATENCIES, KEY_SUBMIT_INTERVAL as HOTSTUFF_SUBMIT_INTERVAL,
+    KEY_SUBMIT_LIMIT as HOTSTUFF_SUBMIT_LIMIT, Node,
 };
 
 const BASELINE_NODE_COUNTS: [usize; 10] = [4, 8, 16, 32, 64, 128, 256, 512, 1_024, 2_048];
@@ -35,7 +35,7 @@ const THREE_JANE_NODE_COUNTS: [usize; 8] = [25, 36, 64, 121, 256, 529, 1_024, 2_
 const BLSMR_TIME_BUDGET: Jiffies = Jiffies(40_000);
 const HOTSTUFF_TIME_BUDGET: Jiffies = Jiffies(5_000_000);
 const BULLSHARK_TIME_BUDGET: Jiffies = Jiffies(100_000);
-const SUBMIT_INTERVAL: Jiffies = Jiffies(55);
+const SUBMIT_INTERVAL: Jiffies = Jiffies(500);
 const THREE_JANE_FAULTS: usize = 1;
 const THREE_JANE_ZIPF_EXPONENT: f64 = 0.99;
 const SEED: u64 = 42;
@@ -65,7 +65,10 @@ impl<P: Process> Process for Measured<P> {
     }
 
     fn on_message(&mut self, from: Pid, message: MessagePtr) {
-        MESSAGE_COUNTS[dscale::pid()].fetch_add(1, Ordering::Relaxed);
+        if !hotstuff::is_command_submission(&message) && !bullshark::is_command_submission(&message)
+        {
+            MESSAGE_COUNTS[dscale::pid()].fetch_add(1, Ordering::Relaxed);
+        }
         self.0.on_message(from, message);
     }
 
@@ -236,12 +239,16 @@ fn load_stats(calls: &[usize], committed: usize) -> (f64, f64) {
     }
     let mean = calls.iter().sum::<usize>() as f64 / committed as f64;
     let scale = calls.len() as f64 / committed as f64;
+    let worst = calls
+        .iter()
+        .map(|calls| *calls as f64 * scale)
+        .fold(0.0, f64::max);
     let variance = calls
         .iter()
         .map(|calls| (*calls as f64 * scale - mean).powi(2))
         .sum::<f64>()
         / calls.len() as f64;
-    (mean, variance.sqrt())
+    (worst, variance.sqrt())
 }
 
 fn latency_stats(latencies: &[Jiffies]) -> (f64, f64) {
@@ -261,26 +268,38 @@ fn latency_stats(latencies: &[Jiffies]) -> (f64, f64) {
 
 fn run_hotstuff(nodes: usize) -> (f64, f64, f64, f64) {
     let simulation = simulation::<ChainedHotstuff>(nodes, HOTSTUFF_TIME_BUDGET);
+    let block_commits = Arc::new(AtomicUsize::new(0));
     kv::set(B0, Arc::new(Node::genesis()));
     kv::set(HOTSTUFF_SUBMIT_INTERVAL, SUBMIT_INTERVAL);
     kv::set(HOTSTUFF_SUBMIT_LIMIT, usize::MAX);
+    kv::set(HOTSTUFF_BLOCK_COMMITS, block_commits.clone());
     kv::set::<Vec<Jiffies>>(HOTSTUFF_LATENCIES, Vec::new());
     measure(simulation, nodes, || {
         let latencies = kv::get::<Vec<Jiffies>>(HOTSTUFF_LATENCIES);
         let (average, standard_deviation) = latency_stats(&latencies);
-        (latencies.len(), average, standard_deviation)
+        (
+            block_commits.load(Ordering::Relaxed),
+            average,
+            standard_deviation,
+        )
     })
 }
 
 fn run_bullshark(nodes: usize) -> (f64, f64, f64, f64) {
     let simulation = simulation::<Bullshark>(nodes, BULLSHARK_TIME_BUDGET);
+    let block_commits = Arc::new(AtomicUsize::new(0));
     kv::set(BULLSHARK_SUBMIT_INTERVAL, SUBMIT_INTERVAL);
     kv::set(BULLSHARK_SUBMIT_LIMIT, usize::MAX);
+    kv::set(BULLSHARK_BLOCK_COMMITS, block_commits.clone());
     kv::set::<Vec<Jiffies>>(BULLSHARK_LATENCIES, Vec::new());
     measure(simulation, nodes, || {
         let latencies = kv::get::<Vec<Jiffies>>(BULLSHARK_LATENCIES);
         let (average, standard_deviation) = latency_stats(&latencies);
-        (latencies.len(), average, standard_deviation)
+        (
+            block_commits.load(Ordering::Relaxed),
+            average,
+            standard_deviation,
+        )
     })
 }
 

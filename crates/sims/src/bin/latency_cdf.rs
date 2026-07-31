@@ -1,4 +1,9 @@
-use std::{fs::File, io::Write, path::PathBuf, sync::Arc};
+use std::{
+    fs::File,
+    io::Write,
+    path::PathBuf,
+    sync::{Arc, atomic::AtomicUsize},
+};
 
 use blsmr::{
     BLSMRProtocol, KEY_ANNOUNCE_TIMEOUT, KEY_AVG_COMMIT_LATENCY, KEY_COMMIT_LATENCIES,
@@ -6,7 +11,7 @@ use blsmr::{
     KEY_SUBMIT_LIMIT, KEY_TRACK_CONFLICT_RATE, KEY_ZIPF_EXPONENT, POOL_BLSMR, log, process::BLSMR,
 };
 use bullshark::{
-    Bullshark, KEY_LATENCIES as BULLSHARK_LATENCIES,
+    Bullshark, KEY_BLOCK_COMMITS as BULLSHARK_BLOCK_COMMITS, KEY_LATENCIES as BULLSHARK_LATENCIES,
     KEY_SUBMIT_INTERVAL as BULLSHARK_SUBMIT_INTERVAL, KEY_SUBMIT_LIMIT as BULLSHARK_SUBMIT_LIMIT,
 };
 use dscale::{
@@ -15,9 +20,9 @@ use dscale::{
     services::kv,
 };
 use hotstuff::{
-    B0, ChainedHotstuff, KEY_LATENCIES as HOTSTUFF_LATENCIES,
-    KEY_SUBMIT_INTERVAL as HOTSTUFF_SUBMIT_INTERVAL, KEY_SUBMIT_LIMIT as HOTSTUFF_SUBMIT_LIMIT,
-    Node, NonRotatingHotstuff,
+    B0, ChainedHotstuff, KEY_BLOCK_COMMITS as HOTSTUFF_BLOCK_COMMITS,
+    KEY_LATENCIES as HOTSTUFF_LATENCIES, KEY_SUBMIT_INTERVAL as HOTSTUFF_SUBMIT_INTERVAL,
+    KEY_SUBMIT_LIMIT as HOTSTUFF_SUBMIT_LIMIT, Node, NonRotatingHotstuff,
 };
 
 const TIME_BUDGET: Jiffies = Jiffies(2_000_000);
@@ -155,6 +160,7 @@ fn run_hotstuff<P: Process + Default + Send + 'static>(
     kv::set(B0, Arc::new(Node::genesis()));
     kv::set(HOTSTUFF_SUBMIT_INTERVAL, WINTERMUTE_SUBMIT_INTERVAL);
     kv::set(HOTSTUFF_SUBMIT_LIMIT, usize::MAX);
+    kv::set(HOTSTUFF_BLOCK_COMMITS, Arc::new(AtomicUsize::new(0)));
     kv::set::<Vec<Jiffies>>(HOTSTUFF_LATENCIES, Vec::new());
     simulation.run_full_budget();
     kv::get(HOTSTUFF_LATENCIES)
@@ -169,6 +175,7 @@ fn run_bullshark(topology: NetworkTopology) -> Vec<Jiffies> {
     .build();
     kv::set(BULLSHARK_SUBMIT_INTERVAL, WINTERMUTE_SUBMIT_INTERVAL);
     kv::set(BULLSHARK_SUBMIT_LIMIT, usize::MAX);
+    kv::set(BULLSHARK_BLOCK_COMMITS, Arc::new(AtomicUsize::new(0)));
     kv::set::<Vec<Jiffies>>(BULLSHARK_LATENCIES, Vec::new());
     simulation.run_full_budget();
     kv::get(BULLSHARK_LATENCIES)

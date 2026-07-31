@@ -1,6 +1,6 @@
 use std::sync::{
     Arc, Weak,
-    atomic::{AtomicBool, Ordering},
+    atomic::{AtomicBool, AtomicUsize, Ordering},
 };
 
 use client::{CmdId, Command};
@@ -9,6 +9,7 @@ use rustc_hash::FxHashMap;
 
 pub const B0: &str = "hotstuff_genesis";
 pub const HOTSTUFF_POOL: &str = dscale::GLOBAL_POOL;
+pub const KEY_BLOCK_COMMITS: &str = "hotstuff_block_commits";
 pub const KEY_LATENCIES: &str = "hotstuff_latencies";
 pub const KEY_SUBMIT_INTERVAL: &str = "submit_interval";
 pub const KEY_SUBMIT_LIMIT: &str = "submit_limit";
@@ -54,11 +55,19 @@ enum HSMessage {
 
 impl Message for HSMessage {}
 
+pub fn is_command_submission(message: &MessagePtr) -> bool {
+    matches!(
+        message.try_as_type::<HSMessage>(),
+        Some(HSMessage::Submit(_))
+    )
+}
+
 pub struct Hotstuff<const ROTATING: bool> {
     submit_interval: Jiffies,
     submit_limit: usize,
     submitted: usize,
     current_submit_timer_id: TimerId,
+    block_commits: Arc<AtomicUsize>,
     pending_commands: FxHashMap<CmdId, Arc<SubmittedCommand>>,
     pending_quorums: FxHashMap<NodeId, (usize, Quorum<()>)>,
     nodes: FxHashMap<NodeId, Arc<Node>>,
@@ -80,6 +89,7 @@ impl<const ROTATING: bool> Default for Hotstuff<ROTATING> {
             submit_limit: kv::get(KEY_SUBMIT_LIMIT),
             submitted: 0,
             current_submit_timer_id: 0,
+            block_commits: kv::get(KEY_BLOCK_COMMITS),
             pending_commands: FxHashMap::default(),
             pending_quorums: FxHashMap::default(),
             nodes,
@@ -177,6 +187,7 @@ impl<const ROTATING: bool> Hotstuff<ROTATING> {
     fn commit(&mut self, node: Arc<Node>) {
         if self.b_exec.height < node.height {
             self.commit(node.parent().expect("genesis cannot commit"));
+            self.block_commits.fetch_add(1, Ordering::Relaxed);
             for command in node.commands.iter() {
                 if !command.committed.swap(true, Ordering::Relaxed) {
                     let latency = now() - command.submitted_at;

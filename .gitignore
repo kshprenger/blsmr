@@ -1,5 +1,5 @@
 target
 .DS_Store
 Cargo.lock
-latency_cdf.csv
-wintermute_paths.csv
+*.csv
+*.svg

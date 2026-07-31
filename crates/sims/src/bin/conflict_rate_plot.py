@@ -119,7 +119,7 @@ def main():
     ax.legend(
         [latency_line, fast_path_line],
         ["Execution latency", "Fast-path rate"],
-        loc="upper center",
+        loc="lower center",
     )
 
     fig.tight_layout(rect=(0, 0, 0.88, 1))

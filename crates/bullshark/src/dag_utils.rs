@@ -1,7 +1,10 @@
 use std::{
     collections::VecDeque,
     ops::Index,
-    sync::{Arc, Weak, atomic::Ordering},
+    sync::{
+        Arc, Weak,
+        atomic::{AtomicUsize, Ordering},
+    },
 };
 
 use dscale::{Jiffies, Message, Pid, now, services::kv};
@@ -81,25 +84,24 @@ impl RoundBasedDAG {
         self.proc_num = proc_num;
     }
 
-    pub fn order_from(&mut self, vertex: &VertexPtr) {
+    pub fn order_from(&mut self, vertex: &VertexPtr, block_commits: &AtomicUsize) {
         let mut queue = VecDeque::from([vertex.clone()]);
         while let Some(current) = queue.pop_front() {
-            for edge in self.live_edges(&current) {
-                let round = self.round(edge.round);
-                if self.ordered[round][edge.source] {
-                    continue;
-                }
-                self.ordered[round][edge.source] = true;
-                for command in edge.commands.iter() {
-                    if !command.committed.swap(true, Ordering::Relaxed) {
-                        let latency = now() - command.submitted_at;
-                        kv::modify::<Vec<Jiffies>>(KEY_LATENCIES, |latencies| {
-                            latencies.push(latency);
-                        });
-                    }
-                }
-                queue.push_back(edge);
+            let round = self.round(current.round);
+            if self.ordered[round][current.source] {
+                continue;
             }
+            self.ordered[round][current.source] = true;
+            block_commits.fetch_add(1, Ordering::Relaxed);
+            for command in current.commands.iter() {
+                if !command.committed.swap(true, Ordering::Relaxed) {
+                    let latency = now() - command.submitted_at;
+                    kv::modify::<Vec<Jiffies>>(KEY_LATENCIES, |latencies| {
+                        latencies.push(latency);
+                    });
+                }
+            }
+            queue.extend(self.live_edges(&current));
         }
     }
 
