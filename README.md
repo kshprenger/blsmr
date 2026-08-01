@@ -1,6 +1,6 @@
 # Byzantine Leaderless State Machine Replication
 
-[DScale](https://codeberg.org/kshprenger/dscale) simulations of BLSMR,
+Simulations of BLSMR,
 HotStuff, and Bullshark. BLSMR agrees on command dependencies through a fast
 path, falls back to quorum consensus when necessary, and executes stable
 commands dependency-first.
@@ -81,10 +81,7 @@ Outputs:
 ## Scalability
 
 The simulation starts Bullshark and HotStuff at 4 replicas, Wintermute at 6,
-and 3Jane at 25. It supports up to 2,048 replicas, except Bullshark, which
-stops at 512. The plotted 3Jane series uses the maximum-fault configuration
-and is labelled `3Jane`. Every protocol uses sequential scheduling and
-terrestrial latency with round-robin region placement.
+and 3Jane at 25. Every protocol supports up to 1,024 replicas.
 
 Local MPI run:
 
