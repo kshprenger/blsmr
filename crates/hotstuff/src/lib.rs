@@ -158,7 +158,13 @@ impl<const ROTATING: bool> Process for Hotstuff<ROTATING> {
             submitted_at: now(),
             committed: AtomicBool::new(false),
         });
-        broadcast(HSMessage::Submit(command));
+        self.pending_commands
+            .insert(command.command.id, command.clone());
+        let remotes = list_pool(HOTSTUFF_POOL)
+            .into_iter()
+            .filter(|replica| *replica != pid())
+            .collect::<Vec<_>>();
+        send_many(&remotes, HSMessage::Submit(command));
         self.submitted += 1;
         if self.submitted < self.submit_limit {
             self.schedule_submit();

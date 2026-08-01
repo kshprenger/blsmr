@@ -21,6 +21,23 @@ def main():
             rows.extend(csv.DictReader(f))
     if not rows:
         raise SystemExit(f"no rows found for pattern {pattern!r}")
+    for nodes in (32, 36, 512, 2025, 2048):
+        for protocol in PROTOCOLS:
+            row = next(
+                (
+                    row
+                    for row in rows
+                    if row["protocol"] == protocol and int(row["nodes"]) == nodes
+                ),
+                None,
+            )
+            if row:
+                average = float(row["average_commit_latency_jiffies"])
+                deviation = float(row["commit_latency_standard_deviation_jiffies"])
+                print(
+                    f"{protocol.removesuffix('*')} latency at n={nodes}: "
+                    f"{average:.6f} ± {deviation:.6f} jiffies"
+                )
     fig, load_ax = plt.subplots(figsize=(7, 4), dpi=150)
     for protocol in PROTOCOLS:
         points = sorted(

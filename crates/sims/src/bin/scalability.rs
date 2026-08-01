@@ -42,7 +42,6 @@ const SEED: u64 = 42;
 const EARTH_RADIUS_KM: f64 = 6_371.0;
 const LIGHT_SPEED_KM_PER_SECOND: f64 = 299_792.458;
 const MAX_NODES: usize = 2_048;
-const BULLSHARK_MAX_NODES: usize = 512;
 static MESSAGE_COUNTS: [AtomicUsize; MAX_NODES] = [const { AtomicUsize::new(0) }; MAX_NODES];
 
 struct Region {
@@ -121,9 +120,6 @@ fn configs() -> Vec<Config> {
                 .into_iter()
                 .map(move |protocol| Config { nodes, protocol })
         }))
-        .filter(|config| {
-            config.protocol != Protocol::Bullshark || config.nodes <= BULLSHARK_MAX_NODES
-        })
         .collect()
 }
 
