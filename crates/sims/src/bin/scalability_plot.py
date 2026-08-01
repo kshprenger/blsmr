@@ -21,7 +21,7 @@ def main():
             rows.extend(csv.DictReader(f))
     if not rows:
         raise SystemExit(f"no rows found for pattern {pattern!r}")
-    for nodes in (32, 36, 512, 2025, 2048):
+    for nodes in (32, 36, 512 ,529, 1024):
         for protocol in PROTOCOLS:
             row = next(
                 (
@@ -65,7 +65,7 @@ def main():
     load_ax.set_xlabel("nodes")
     load_ax.set_xscale("log", base=2)
     load_ax.set_ylim(bottom=0)
-    load_ax.set_xticks([2**power for power in range(1, 12)])
+    load_ax.set_xticks([2**power for power in range(1, 11)])
     load_ax.get_xaxis().set_major_formatter(plt.ScalarFormatter())
     load_ax.grid(True, color="#e1e0d9", linewidth=0.8)
     load_ax.legend(loc="upper left", bbox_to_anchor=(1.02, 1), borderaxespad=0)

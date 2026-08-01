@@ -100,7 +100,7 @@ cargo install cross --git https://github.com/cross-rs/cross
 ssh remote_machine 'mkdir -p "$HOME/blsmr/scale"'
 cross build --release --target x86_64-unknown-linux-musl --bin scalability
 scp target/x86_64-unknown-linux-musl/release/scalability remote_machine:~/blsmr/scale/
-ssh remote_machine 'sbatch -N 19 -n 19 --ntasks-per-node=1 --cpus-per-task=24 --exclusive --distribution=block:block --chdir="$HOME/blsmr/scale" --wrap='"'"'for n in 4 6 8 16 25 32 36 64 121 128 256 512 529 1024 2025 2048; do srun -n 19 --ntasks-per-node=1 --cpus-per-task=24 --distribution=block:block env SCALABILITY_NODES=$n ./scalability; done'"'"''
+ssh remote_machine 'sbatch -N 19 -n 19 --ntasks-per-node=1 --cpus-per-task=24 --exclusive --distribution=block:block --chdir="$HOME/blsmr/scale" --wrap='"'"'for n in 4 6 8 16 25 32 36 64 121 128 256 512 529 1024; do srun -n 19 --ntasks-per-node=1 --cpus-per-task=24 --distribution=block:block env SCALABILITY_NODES=$n ./scalability; done'"'"''
 ```
 
 Retrieve and plot the results:
