@@ -29,9 +29,9 @@ use hotstuff::{
     KEY_SUBMIT_LIMIT as HOTSTUFF_SUBMIT_LIMIT, Node,
 };
 
-const BASELINE_NODE_COUNTS: [usize; 10] = [4, 8, 16, 32, 64, 128, 256, 512, 1_024, 2_048];
-const WINTERMUTE_NODE_COUNTS: [usize; 10] = [6, 8, 16, 32, 64, 128, 256, 512, 1_024, 2_048];
-const THREE_JANE_NODE_COUNTS: [usize; 8] = [25, 36, 64, 121, 256, 529, 1_024, 2_025];
+const BASELINE_NODE_COUNTS: [usize; 9] = [4, 8, 16, 32, 64, 128, 256, 512, 1_024];
+const WINTERMUTE_NODE_COUNTS: [usize; 9] = [6, 8, 16, 32, 64, 128, 256, 512, 1_024];
+const THREE_JANE_NODE_COUNTS: [usize; 7] = [25, 36, 64, 121, 256, 529, 1_024];
 const BLSMR_TIME_BUDGET: Jiffies = Jiffies(40_000);
 const HOTSTUFF_TIME_BUDGET: Jiffies = Jiffies(5_000_000);
 const BULLSHARK_TIME_BUDGET: Jiffies = Jiffies(100_000);
