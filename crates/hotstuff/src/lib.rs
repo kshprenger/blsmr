@@ -143,7 +143,9 @@ impl<const ROTATING: bool> Process for Hotstuff<ROTATING> {
                 if quorum.add(()).is_some() {
                     self.nodes.insert(node.id, node.clone());
                     self.b_leaf = node.clone();
-                    broadcast(HSMessage::Propose(self.create_leaf()));
+                    let leaf = self.create_leaf();
+                    self.update(leaf.clone());
+                    broadcast(HSMessage::Propose(leaf));
                 }
             }
         }
