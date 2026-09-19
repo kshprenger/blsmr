@@ -5,7 +5,7 @@ members = [
 ]
 
 [workspace.dependencies]
-dscale = {git = "https://codeberg.org/kshprenger/dscale.git", branch = "master"}
+dscale = "0.7.2"
 
 [profile.release]
 lto = "fat"
