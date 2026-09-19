@@ -151,6 +151,7 @@ fn output_path() -> PathBuf {
 fn main() {
     let results = mpi::distribute(sweep(), run_once);
     let path = output_path();
+    std::fs::create_dir_all(path.parent().unwrap()).expect("failed to create results directory");
     let mut file = File::create(&path).expect("failed to create results file");
     writeln!(
         file,

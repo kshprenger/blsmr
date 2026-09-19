@@ -273,6 +273,7 @@ fn write_path_records(file: &mut File, topology: NetworkTopology, records: Vec<l
 fn main() {
     let path = csv_path();
     let path_records_path = path_csv_path();
+    std::fs::create_dir_all(path.parent().unwrap()).expect("failed to create results directory");
     let mut file = File::create(&path).expect("failed to create results file");
     let mut path_file =
         File::create(&path_records_path).expect("failed to create path results file");
