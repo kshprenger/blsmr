@@ -6,10 +6,7 @@ import matplotlib.pyplot as plt
 
 from plot_style import PLOT_STYLE, save_svg
 
-DATA_PATH = Pat
-
-
-h(__file__).parent / "latency_cdf" / "aws_regions.csv"
+DATA_PATH = Path(__file__).parent / "latency_cdf" / "aws_regions.csv"
 plt.rcParams.update(PLOT_STYLE)
 
 
