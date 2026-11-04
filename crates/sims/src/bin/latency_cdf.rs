@@ -15,7 +15,7 @@ use bullshark::{
     KEY_SUBMIT_INTERVAL as BULLSHARK_SUBMIT_INTERVAL, KEY_SUBMIT_LIMIT as BULLSHARK_SUBMIT_LIMIT,
 };
 use dscale::{
-    BandwidthConfig, Distr, Jiffies, Process, SimulationBuilder,
+    BandwidthConfig, Jiffies, LatencyDistribution, Process, SimulationBuilder,
     rand::{SeedableRng, rngs::SmallRng, seq::SliceRandom},
     services::kv,
 };
@@ -71,8 +71,8 @@ fn builder() -> SimulationBuilder {
         .seq_sched()
 }
 
-fn fixed_latency(latency: Jiffies) -> Distr {
-    Distr::Uniform {
+fn fixed_latency(latency: Jiffies) -> LatencyDistribution {
+    LatencyDistribution::Uniform {
         low: latency,
         high: latency,
     }
@@ -83,7 +83,7 @@ fn uniform_builder<P: Process + Default + Send + 'static>(
     replicas: usize,
 ) -> SimulationBuilder {
     builder()
-        .add_pool::<P>(pool, replicas)
+        .add_to_pool::<P>(pool, replicas)
         .within_pool_latency(pool, fixed_latency(UNIFORM_LATENCY))
 }
 
@@ -119,7 +119,7 @@ fn terrestrial_builder<P: Process + Default + Send + 'static>(
 ) -> SimulationBuilder {
     let mut simulation = builder();
     for region in regions.iter().cycle().take(replicas) {
-        simulation = simulation.add_pool::<P>(&region.name, 1);
+        simulation = simulation.add_to_pool::<P>(&region.name, 1);
     }
     for region in regions {
         simulation = simulation.within_pool_latency(&region.name, fixed_latency(Jiffies(0)));

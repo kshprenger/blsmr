@@ -6,7 +6,7 @@ use blsmr::{
     KEY_SUBMIT_LIMIT, KEY_TRACK_CONFLICT_RATE, KEY_ZIPF_EXPONENT, POOL_BLSMR, log, process::BLSMR,
 };
 use dscale::{
-    BandwidthConfig, Distr, Jiffies, SimulationBuilder, mpi,
+    BandwidthConfig, Jiffies, LatencyDistribution, SimulationBuilder, mpi,
     rand::{SeedableRng, rngs::SmallRng, seq::SliceRandom},
     services::kv,
 };
@@ -70,8 +70,8 @@ fn regions(seed: u64) -> Vec<Region> {
     regions
 }
 
-fn fixed_latency(latency: Jiffies) -> Distr {
-    Distr::Uniform {
+fn fixed_latency(latency: Jiffies) -> LatencyDistribution {
+    LatencyDistribution::Uniform {
         low: latency,
         high: latency,
     }
@@ -88,7 +88,7 @@ fn light_latency(from: &Region, to: &Region) -> Jiffies {
     Jiffies((distance_km / LIGHT_SPEED_KM_PER_SECOND * 1_000.0).ceil() as usize)
 }
 
-fn simulation(seed: u64) -> Box<dyn dscale::SimulationRunner> {
+fn simulation(seed: u64) -> dscale::Runner {
     let regions = regions(seed);
     let mut builder = SimulationBuilder::new()
         .default_bandwidth(BandwidthConfig::Unbounded)
@@ -96,7 +96,7 @@ fn simulation(seed: u64) -> Box<dyn dscale::SimulationRunner> {
         .seed(seed)
         .par_sched(dscale::ThreadNumber::MatchCores);
     for region in &regions {
-        builder = builder.add_pool::<BLSMR>(&region.name, 1);
+        builder = builder.add_to_pool::<BLSMR>(&region.name, 1);
     }
     for region in &regions {
         builder = builder.within_pool_latency(&region.name, fixed_latency(Jiffies(0)));

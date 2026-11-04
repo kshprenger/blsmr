@@ -19,7 +19,8 @@ use bullshark::{
     KEY_SUBMIT_INTERVAL as BULLSHARK_SUBMIT_INTERVAL, KEY_SUBMIT_LIMIT as BULLSHARK_SUBMIT_LIMIT,
 };
 use dscale::{
-    BandwidthConfig, Distr, Jiffies, MessagePtr, Pid, Process, SimulationBuilder, TimerId, mpi,
+    BandwidthConfig, Jiffies, LatencyDistribution, MessagePtr, Pid, Process, SimulationBuilder,
+    TimerId, mpi,
     rand::{SeedableRng, rngs::SmallRng, seq::SliceRandom},
     services::kv,
 };
@@ -136,7 +137,7 @@ fn selected_configs() -> Vec<Config> {
 fn simulation<P: Process + Default + Send + 'static>(
     nodes: usize,
     time_budget: Jiffies,
-) -> Box<dyn dscale::SimulationRunner> {
+) -> dscale::Runner {
     let regions = terrestrial_regions(nodes);
     let mut builder = SimulationBuilder::new()
         .default_bandwidth(BandwidthConfig::Unbounded)
@@ -145,7 +146,7 @@ fn simulation<P: Process + Default + Send + 'static>(
         .seq_sched();
     for region in (0..nodes).map(|index| &regions[index % regions.len()]) {
         builder = builder
-            .add_pool::<Measured<P>>(&region.name, 1)
+            .add_to_pool::<Measured<P>>(&region.name, 1)
             .within_pool_latency(&region.name, fixed_latency(Jiffies(1)));
     }
     for (index, from) in regions.iter().enumerate() {
@@ -186,8 +187,8 @@ fn terrestrial_regions(nodes: usize) -> Vec<Region> {
     regions
 }
 
-fn fixed_latency(latency: Jiffies) -> Distr {
-    Distr::Uniform {
+fn fixed_latency(latency: Jiffies) -> LatencyDistribution {
+    LatencyDistribution::Uniform {
         low: latency,
         high: latency,
     }
@@ -205,7 +206,7 @@ fn light_latency(from: &Region, to: &Region) -> Jiffies {
 }
 
 fn measure(
-    mut simulation: Box<dyn dscale::SimulationRunner>,
+    mut simulation: dscale::Runner,
     nodes: usize,
     metrics: impl FnOnce() -> (usize, f64, f64),
 ) -> (f64, f64, f64, f64) {
