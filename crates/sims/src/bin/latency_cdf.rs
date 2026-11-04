@@ -1,4 +1,5 @@
 use std::{
+    collections::{HashMap, HashSet},
     fs::File,
     io::Write,
     path::PathBuf,
@@ -25,13 +26,15 @@ use hotstuff::{
     KEY_SUBMIT_LIMIT as HOTSTUFF_SUBMIT_LIMIT, Node, NonRotatingHotstuff,
 };
 
-const TIME_BUDGET: Jiffies = Jiffies(2_000_000);
-const UNIFORM_LATENCY: Jiffies = Jiffies(100);
+const TIME_BUDGET: Jiffies = Jiffies(2_000_000_000);
+const UNIFORM_LATENCY: Jiffies = Jiffies(100_000);
 const SEED: u64 = 42;
-const WINTERMUTE_SUBMIT_INTERVAL: Jiffies = Jiffies(55);
+const ACCOUNT_COUNT: usize = 10_000;
+const WORKLOAD_SEED: u64 = 42;
+const WINTERMUTE_SUBMIT_INTERVAL: Jiffies = Jiffies(55_000);
 const THREE_JANE_FAULTS: usize = 1;
-const EARTH_RADIUS_KM: f64 = 6_371.0;
-const LIGHT_SPEED_KM_PER_SECOND: f64 = 299_792.458;
+const REGION_COUNT: usize = 8;
+const TERRESTRIAL_STD_DEV: usize = 593;
 
 #[derive(Clone, Copy)]
 enum NetworkTopology {
@@ -51,8 +54,6 @@ impl NetworkTopology {
 #[derive(Clone)]
 struct Region {
     name: String,
-    latitude: f64,
-    longitude: f64,
 }
 
 fn csv_path() -> PathBuf {
@@ -66,6 +67,7 @@ fn path_csv_path() -> PathBuf {
 fn builder() -> SimulationBuilder {
     SimulationBuilder::new()
         .default_bandwidth(BandwidthConfig::Unbounded)
+        .jiffies_per_second(1_000_000)
         .time_budget(TIME_BUDGET)
         .seed(SEED)
         .seq_sched()
@@ -91,23 +93,17 @@ fn terrestrial_regions(replicas: usize) -> Vec<Region> {
     let mut regions = include_str!("latency_cdf/aws_regions.csv")
         .lines()
         .skip(1)
-        .map(|line| {
-            let mut fields = line.split(',');
-            Region {
-                name: fields.next().expect("missing AWS Region ID").to_owned(),
-                latitude: fields
-                    .next()
-                    .expect("missing latitude")
-                    .parse()
-                    .expect("invalid latitude"),
-                longitude: fields
-                    .next()
-                    .expect("missing longitude")
-                    .parse()
-                    .expect("invalid longitude"),
-            }
+        .map(|line| Region {
+            name: line
+                .split(',')
+                .next()
+                .expect("missing AWS Region ID")
+                .to_owned(),
         })
         .collect::<Vec<_>>();
+    let unique: HashSet<_> = regions.iter().map(|region| &region.name).collect();
+    assert_eq!(regions.len(), REGION_COUNT, "expected eight AWS regions");
+    assert_eq!(unique.len(), REGION_COUNT, "duplicate AWS region");
     regions.shuffle(&mut SmallRng::seed_from_u64(SEED));
     regions.truncate(replicas);
     regions
@@ -117,39 +113,120 @@ fn terrestrial_builder<P: Process + Default + Send + 'static>(
     regions: &[Region],
     replicas: usize,
 ) -> SimulationBuilder {
+    let means = terrestrial_pair_means();
     let mut simulation = builder();
     for region in regions.iter().cycle().take(replicas) {
         simulation = simulation.add_to_pool::<P>(&region.name, 1);
     }
     for region in regions {
-        simulation = simulation.within_pool_latency(&region.name, fixed_latency(Jiffies(0)));
+        simulation = simulation.within_pool_latency(&region.name, fixed_latency(Jiffies(1)));
     }
     for (index, from) in regions.iter().enumerate() {
         for to in &regions[index + 1..] {
             simulation = simulation.between_pool_latency(
                 &from.name,
                 &to.name,
-                fixed_latency(light_latency(from, to)),
+                normal_latency(
+                    *means
+                        .get(&(from.name.as_str(), to.name.as_str()))
+                        .expect("missing AWS region pair"),
+                ),
             );
         }
     }
     simulation
 }
 
-fn light_latency(from: &Region, to: &Region) -> Jiffies {
-    let latitude_delta = (to.latitude - from.latitude).to_radians();
-    let longitude_delta = (to.longitude - from.longitude).to_radians();
-    let from_latitude = from.latitude.to_radians();
-    let to_latitude = to.latitude.to_radians();
-    let half_chord = (latitude_delta / 2.0).sin().powi(2)
-        + from_latitude.cos() * to_latitude.cos() * (longitude_delta / 2.0).sin().powi(2);
-    let distance_km = EARTH_RADIUS_KM * 2.0 * half_chord.sqrt().asin();
-    Jiffies((distance_km / LIGHT_SPEED_KM_PER_SECOND * 1_000.0).ceil() as usize)
+fn terrestrial_pair_means() -> HashMap<(&'static str, &'static str), f64> {
+    let regions: HashSet<_> = include_str!("latency_cdf/aws_regions.csv")
+        .lines()
+        .skip(1)
+        .map(|line| line.split(',').next().expect("missing AWS Region ID"))
+        .collect();
+    assert_eq!(
+        regions.len(),
+        REGION_COUNT,
+        "expected eight unique AWS regions"
+    );
+    let mut means = HashMap::new();
+    for line in include_str!("latency_cdf/aws_pair_means.csv")
+        .lines()
+        .skip(1)
+    {
+        let mut fields = line.split(',');
+        let from = fields.next().expect("missing source region");
+        let to = fields.next().expect("missing destination region");
+        let mean: f64 = fields
+            .next()
+            .expect("missing pair mean")
+            .parse()
+            .expect("invalid pair mean");
+        assert!(
+            from != to && regions.contains(from) && regions.contains(to),
+            "invalid AWS region pair"
+        );
+        assert!(mean.is_finite() && mean > 0.0, "invalid pair mean");
+        assert!(
+            means.insert((from, to), mean).is_none(),
+            "duplicate AWS region pair"
+        );
+        assert!(
+            means.insert((to, from), mean).is_none(),
+            "duplicate AWS region pair"
+        );
+    }
+    assert_eq!(
+        means.len(),
+        REGION_COUNT * (REGION_COUNT - 1),
+        "incomplete AWS region pairs"
+    );
+    means
+}
+
+fn normal_latency(mean_ms: f64) -> LatencyDistribution {
+    LatencyDistribution::Normal {
+        mean: Jiffies((mean_ms * 1_000.0).round() as usize),
+        std_dev: Jiffies(TERRESTRIAL_STD_DEV),
+        low: Jiffies(1),
+        high: Jiffies(((mean_ms + 6.0 * 0.593) * 1_000.0).ceil() as usize),
+    }
+}
+
+fn configure_replay(trace: &Arc<client::ReplayTrace>) -> Arc<client::ReplayMetrics> {
+    let metrics = Arc::new(client::ReplayMetrics::new(trace.replica_count));
+    kv::set(client::KEY_REPLAY_TRACE, Some(Arc::clone(trace)));
+    kv::set(client::KEY_REPLAY_METRICS, Arc::clone(&metrics));
+    metrics
+}
+
+fn report_replay(
+    topology: NetworkTopology,
+    protocol: &str,
+    trace: &client::ReplayTrace,
+    metrics: &client::ReplayMetrics,
+    samples: usize,
+) {
+    let submitted = metrics.snapshot();
+    let total = submitted.iter().sum::<usize>();
+    assert!(samples <= total, "more samples than submitted commands");
+    let mut submitted_by_replica = vec![0; trace.replica_count];
+    for (client, count) in submitted.iter().enumerate() {
+        submitted_by_replica[client % trace.replica_count] += count;
+    }
+    println!(
+        "{} {protocol}: offered={}, submitted={total}, sampled={samples}, unfinished={}, submitted_by_replica={submitted_by_replica:?}, submitted_by_client={submitted:?}",
+        topology.name(),
+        trace.records.len(),
+        total - samples
+    );
+    assert_eq!(total, trace.records.len(), "incomplete replay submission");
 }
 
 fn run_hotstuff<P: Process + Default + Send + 'static>(
     topology: NetworkTopology,
     uniform_pool: &'static str,
+    protocol: &str,
+    trace: &Arc<client::ReplayTrace>,
 ) -> Vec<Jiffies> {
     let regions = terrestrial_regions(4);
     let mut simulation = match topology {
@@ -157,28 +234,35 @@ fn run_hotstuff<P: Process + Default + Send + 'static>(
         NetworkTopology::Terrestrial => terrestrial_builder::<P>(&regions, 4),
     }
     .build();
+    let metrics = configure_replay(trace);
     kv::set(B0, Arc::new(Node::genesis()));
     kv::set(HOTSTUFF_SUBMIT_INTERVAL, WINTERMUTE_SUBMIT_INTERVAL);
     kv::set(HOTSTUFF_SUBMIT_LIMIT, usize::MAX);
     kv::set(HOTSTUFF_BLOCK_COMMITS, Arc::new(AtomicUsize::new(0)));
     kv::set::<Vec<Jiffies>>(HOTSTUFF_LATENCIES, Vec::new());
     simulation.run_full_budget();
-    kv::get(HOTSTUFF_LATENCIES)
+    let samples: Vec<Jiffies> = kv::get(HOTSTUFF_LATENCIES);
+    report_replay(topology, protocol, trace, &metrics, samples.len());
+    samples
 }
 
-fn run_bullshark(topology: NetworkTopology) -> Vec<Jiffies> {
+fn run_bullshark(topology: NetworkTopology, trace: &Arc<client::ReplayTrace>) -> Vec<Jiffies> {
     let regions = terrestrial_regions(4);
     let mut simulation = match topology {
         NetworkTopology::Uniform => uniform_builder::<Bullshark>("bullshark_uniform", 4),
         NetworkTopology::Terrestrial => terrestrial_builder::<Bullshark>(&regions, 4),
     }
     .build();
+    let metrics = configure_replay(trace);
+    kv::set(bullshark::KEY_ROUND_TIMEOUT, Jiffies(10_000_000));
     kv::set(BULLSHARK_SUBMIT_INTERVAL, WINTERMUTE_SUBMIT_INTERVAL);
     kv::set(BULLSHARK_SUBMIT_LIMIT, usize::MAX);
     kv::set(BULLSHARK_BLOCK_COMMITS, Arc::new(AtomicUsize::new(0)));
     kv::set::<Vec<Jiffies>>(BULLSHARK_LATENCIES, Vec::new());
     simulation.run_full_budget();
-    kv::get(BULLSHARK_LATENCIES)
+    let samples: Vec<Jiffies> = kv::get(BULLSHARK_LATENCIES);
+    report_replay(topology, "Bullshark", trace, &metrics, samples.len());
+    samples
 }
 
 fn run_blsmr(
@@ -186,6 +270,8 @@ fn run_blsmr(
     protocol: BLSMRProtocol,
     replicas: usize,
     uniform_pool: &'static str,
+    protocol_name: &str,
+    trace: &Arc<client::ReplayTrace>,
 ) -> (Vec<Jiffies>, f64, f64, Vec<log::PathRecord>) {
     let regions = terrestrial_regions(replicas);
     let mut simulation = match topology {
@@ -193,6 +279,7 @@ fn run_blsmr(
         NetworkTopology::Terrestrial => terrestrial_builder::<BLSMR>(&regions, replicas),
     }
     .build();
+    let metrics = configure_replay(trace);
     let quorum_system = match &protocol {
         BLSMRProtocol::ThreeJane => quorum::QuorumSystem::new_witnessing_grid_with_faults(
             dscale::list_pool(POOL_BLSMR),
@@ -204,7 +291,7 @@ fn run_blsmr(
     kv::set(KEY_SUBMIT_INTERVAL, WINTERMUTE_SUBMIT_INTERVAL);
     kv::set(KEY_SUBMIT_LIMIT, usize::MAX);
     kv::set(KEY_TRACK_CONFLICT_RATE, true);
-    kv::set(KEY_ANNOUNCE_TIMEOUT, Jiffies(500));
+    kv::set(KEY_ANNOUNCE_TIMEOUT, Jiffies(500_000));
     kv::set(KEY_KEY_COUNT, 512usize);
     kv::set::<Option<f64>>(KEY_ZIPF_EXPONENT, None);
     kv::set(KEY_QUORUM_SYSTEM, quorum_system);
@@ -215,8 +302,10 @@ fn run_blsmr(
         log::ConflictTracker::new(dscale::list_pool(POOL_BLSMR).len()),
     );
     simulation.run_full_budget();
+    let samples: Vec<Jiffies> = kv::get(KEY_COMMIT_LATENCIES);
+    report_replay(topology, protocol_name, trace, &metrics, samples.len());
     (
-        kv::get(KEY_COMMIT_LATENCIES),
+        samples,
         log::conflict_rate_percentage(),
         log::fast_path_percentage(),
         log::path_records(),
@@ -230,8 +319,13 @@ fn write_samples(
     samples: Vec<Jiffies>,
 ) {
     for latency in samples {
-        writeln!(file, "{},{protocol},{}", topology.name(), latency.0)
-            .expect("failed to write latency sample");
+        writeln!(
+            file,
+            "{},{protocol},{:.3}",
+            topology.name(),
+            latency.0 as f64 / 1_000.0
+        )
+        .expect("failed to write latency sample");
     }
 }
 
@@ -271,6 +365,19 @@ fn write_path_records(file: &mut File, topology: NetworkTopology, records: Vec<l
 }
 
 fn main() {
+    let traces: HashMap<usize, Arc<client::ReplayTrace>> = [4, 6, 25]
+        .into_iter()
+        .map(|replicas| {
+            (
+                replicas,
+                Arc::new(client::generate_visa_trace(
+                    ACCOUNT_COUNT,
+                    WORKLOAD_SEED,
+                    replicas,
+                )),
+            )
+        })
+        .collect();
     let path = csv_path();
     let path_records_path = path_csv_path();
     std::fs::create_dir_all(path.parent().unwrap()).expect("failed to create results directory");
@@ -288,20 +395,42 @@ fn main() {
             &mut file,
             topology,
             "HotStuff",
-            run_hotstuff::<ChainedHotstuff>(topology, "hotstuff_uniform"),
+            run_hotstuff::<ChainedHotstuff>(topology, "hotstuff_uniform", "HotStuff", &traces[&4]),
         );
         write_samples(
             &mut file,
             topology,
             "HotStuff*",
-            run_hotstuff::<NonRotatingHotstuff>(topology, "hotstuff_star_uniform"),
+            run_hotstuff::<NonRotatingHotstuff>(
+                topology,
+                "hotstuff_star_uniform",
+                "HotStuff*",
+                &traces[&4],
+            ),
         );
-        write_samples(&mut file, topology, "Bullshark", run_bullshark(topology));
-        let (three_jane, _, _, _) =
-            run_blsmr(topology, BLSMRProtocol::ThreeJane, 25, "three_jane_uniform");
+        write_samples(
+            &mut file,
+            topology,
+            "Bullshark",
+            run_bullshark(topology, &traces[&4]),
+        );
+        let (three_jane, _, _, _) = run_blsmr(
+            topology,
+            BLSMRProtocol::ThreeJane,
+            25,
+            "three_jane_uniform",
+            "3Jane",
+            &traces[&25],
+        );
         write_samples(&mut file, topology, "3Jane", three_jane);
-        let (wintermute, conflict_rate, fast_path_rate, path_records) =
-            run_blsmr(topology, BLSMRProtocol::Wintermute, 6, "wintermute_uniform");
+        let (wintermute, conflict_rate, fast_path_rate, path_records) = run_blsmr(
+            topology,
+            BLSMRProtocol::Wintermute,
+            6,
+            "wintermute_uniform",
+            "Wintermute",
+            &traces[&6],
+        );
         write_samples(&mut file, topology, "Wintermute", wintermute);
         write_path_records(&mut path_file, topology, path_records);
         println!(

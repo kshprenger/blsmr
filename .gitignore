@@ -2,5 +2,7 @@ target
 .DS_Store
 Cargo.lock
 *.csv
+!crates/sims/src/bin/latency_cdf/aws_pair_means.csv
 *.svg
 .direnv
+__pycache__

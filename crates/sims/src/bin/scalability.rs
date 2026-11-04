@@ -265,6 +265,7 @@ fn latency_stats(latencies: &[Jiffies]) -> (f64, f64) {
 
 fn run_hotstuff(nodes: usize) -> (f64, f64, f64, f64) {
     let simulation = simulation::<ChainedHotstuff>(nodes, HOTSTUFF_TIME_BUDGET);
+    kv::set::<Option<Arc<client::ReplayTrace>>>(client::KEY_REPLAY_TRACE, None);
     let block_commits = Arc::new(AtomicUsize::new(0));
     kv::set(B0, Arc::new(Node::genesis()));
     kv::set(HOTSTUFF_SUBMIT_INTERVAL, SUBMIT_INTERVAL);
@@ -284,7 +285,9 @@ fn run_hotstuff(nodes: usize) -> (f64, f64, f64, f64) {
 
 fn run_bullshark(nodes: usize) -> (f64, f64, f64, f64) {
     let simulation = simulation::<Bullshark>(nodes, BULLSHARK_TIME_BUDGET);
+    kv::set::<Option<Arc<client::ReplayTrace>>>(client::KEY_REPLAY_TRACE, None);
     let block_commits = Arc::new(AtomicUsize::new(0));
+    kv::set(bullshark::KEY_ROUND_TIMEOUT, Jiffies(10_000));
     kv::set(BULLSHARK_SUBMIT_INTERVAL, SUBMIT_INTERVAL);
     kv::set(BULLSHARK_SUBMIT_LIMIT, usize::MAX);
     kv::set(BULLSHARK_BLOCK_COMMITS, block_commits.clone());
@@ -306,6 +309,7 @@ fn run_blsmr(
     max_three_jane_faults: bool,
 ) -> (f64, f64, f64, f64) {
     let simulation = simulation::<BLSMR>(nodes, BLSMR_TIME_BUDGET);
+    kv::set::<Option<Arc<client::ReplayTrace>>>(client::KEY_REPLAY_TRACE, None);
     let pids = dscale::list_pool(POOL_BLSMR);
     let zipf_exponent =
         matches!(&protocol, BLSMRProtocol::ThreeJane).then_some(THREE_JANE_ZIPF_EXPONENT);

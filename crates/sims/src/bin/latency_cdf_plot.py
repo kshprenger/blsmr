@@ -81,7 +81,7 @@ def print_terrestrial_medians(samples):
         if topology == "terrestrial":
             print(
                 f"terrestrial {protocol} median latency: "
-                f"{median(values):.2f} jiffies"
+                f"{median(values):.2f} ms"
             )
 
 
@@ -114,7 +114,7 @@ def main():
                 linestyle=LINESTYLES.get(protocol, "-"),
                 linewidth=2,
             )
-        ax.set_xlabel("latency (jiffies)")
+        ax.set_xlabel("latency (ms)")
         ax.set_ylabel("CDF")
         ax.set_xlim(left=0)
         ax.set_ylim(0, 1)

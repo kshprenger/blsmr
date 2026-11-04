@@ -115,6 +115,7 @@ fn simulation(seed: u64) -> dscale::Runner {
 
 fn run_once(params: Params) -> (Params, f64, f64, f64) {
     let mut simulation = simulation(params.seed);
+    kv::set::<Option<std::sync::Arc<client::ReplayTrace>>>(client::KEY_REPLAY_TRACE, None);
     kv::set(KEY_PROTOCOL_TYPE, BLSMRProtocol::Wintermute);
     kv::set(KEY_SUBMIT_INTERVAL, params.submit_interval);
     kv::set(KEY_SUBMIT_LIMIT, COMMANDS_PER_REPLICA);

@@ -9,7 +9,7 @@ use std::{
     },
 };
 
-use client::{CmdId, Command};
+use client::{CmdId, Command, ReplayState};
 use dscale::*;
 use rustc_hash::FxHashMap;
 
@@ -23,6 +23,7 @@ pub const KEY_BLOCK_COMMITS: &str = "bullshark_block_commits";
 pub const KEY_LATENCIES: &str = "bullshark_latencies";
 pub const KEY_SUBMIT_INTERVAL: &str = "submit_interval";
 pub const KEY_SUBMIT_LIMIT: &str = "submit_limit";
+pub const KEY_ROUND_TIMEOUT: &str = "bullshark_round_timeout";
 
 #[derive(Debug)]
 pub(crate) struct SubmittedCommand {
@@ -46,10 +47,12 @@ pub fn is_command_submission(message: &MessagePtr) -> bool {
 }
 
 pub struct Bullshark {
+    round_timeout: Jiffies,
     submit_interval: Jiffies,
     submit_limit: usize,
     submitted: usize,
-    submit_timer: TimerId,
+    submit_timer: Option<TimerId>,
+    replay: Option<ReplayState>,
     block_commits: Arc<AtomicUsize>,
     pending_commands: FxHashMap<CmdId, Arc<SubmittedCommand>>,
     rbcast: ByzantineConsistentBroadcast,
@@ -60,16 +63,18 @@ pub struct Bullshark {
     last_ordered_round: usize,
     ordered_anchors: Vec<VertexPtr>,
     wait: bool,
-    timer: TimerId,
+    timer: Option<TimerId>,
 }
 
 impl Default for Bullshark {
     fn default() -> Self {
         Self {
+            round_timeout: services::kv::get(KEY_ROUND_TIMEOUT),
             submit_interval: services::kv::get(KEY_SUBMIT_INTERVAL),
             submit_limit: services::kv::get(KEY_SUBMIT_LIMIT),
             submitted: 0,
-            submit_timer: 0,
+            submit_timer: None,
+            replay: ReplayState::from_kv(),
             block_commits: services::kv::get(KEY_BLOCK_COMMITS),
             pending_commands: FxHashMap::default(),
             rbcast: ByzantineConsistentBroadcast::default(),
@@ -80,14 +85,16 @@ impl Default for Bullshark {
             last_ordered_round: 0,
             ordered_anchors: Vec::new(),
             wait: true,
-            timer: 0,
+            timer: None,
         }
     }
 }
 
 impl Process for Bullshark {
     fn on_start(&mut self) {
-        if self.submit_limit != 0 {
+        if let Some(replay) = &mut self.replay {
+            replay.start();
+        } else if self.submit_limit != 0 {
             self.schedule_submit();
         }
         self.proc_num = list_pool(BULLSHARK_POOL).len();
@@ -177,18 +184,29 @@ impl Process for Bullshark {
     }
 
     fn on_timer(&mut self, id: TimerId) {
-        if id == self.submit_timer {
-            let command = Arc::new(SubmittedCommand {
-                command: client::create_cmd_for_key(0),
-                submitted_at: now(),
-                committed: AtomicBool::new(false),
-            });
-            broadcast(BullsharkMessage::Submit(command));
+        if self
+            .replay
+            .as_ref()
+            .is_some_and(|replay| replay.is_timer(id))
+        {
+            let records = self.replay.as_mut().unwrap().take_due(id);
+            for record in records {
+                self.submit(client::create_transfer(
+                    record.from,
+                    record.to,
+                    record.amount,
+                ));
+                self.replay.as_ref().unwrap().record_submission(&record);
+            }
+        } else if self.submit_timer == Some(id) {
+            self.submit_timer = None;
+            self.submit(client::create_cmd_for_key(0));
             self.submitted += 1;
             if self.submitted < self.submit_limit {
                 self.schedule_submit();
             }
-        } else if id == self.timer {
+        } else if self.timer == Some(id) {
+            self.timer = None;
             self.wait = false;
             self.try_advance_round();
         }
@@ -213,7 +231,16 @@ impl Bullshark {
     }
 
     fn schedule_submit(&mut self) {
-        self.submit_timer = schedule_timer_after(self.submit_interval);
+        self.submit_timer = Some(schedule_timer_after(self.submit_interval));
+    }
+
+    fn submit(&mut self, command: Command) {
+        let command = Arc::new(SubmittedCommand {
+            command,
+            submitted_at: now(),
+            committed: AtomicBool::new(false),
+        });
+        broadcast(BullsharkMessage::Submit(command));
     }
 
     fn create_vertex(&mut self, round: usize) -> VertexPtr {
@@ -247,7 +274,7 @@ impl Bullshark {
     }
 
     fn start_timer(&mut self) {
-        self.timer = schedule_timer_after(Jiffies(10_000));
+        self.timer = Some(schedule_timer_after(self.round_timeout));
         self.wait = true;
     }
 

@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use client::{CmdId, Command};
+use client::{CmdId, Command, CommandAccess};
 use dscale::services::kv;
 use rustc_hash::{FxHashMap, FxHashSet};
 
@@ -18,6 +18,7 @@ enum Phase {
 pub struct ConflictTracker {
     replica_count: usize,
     commands: FxHashMap<CmdId, TrackedCommand>,
+    by_key: FxHashMap<usize, FxHashSet<CmdId>>,
     conflicting_commands: usize,
     executed_commands: usize,
     paths: FxHashMap<CmdId, bool>,
@@ -31,7 +32,7 @@ pub struct PathRecord {
 }
 
 struct TrackedCommand {
-    key: usize,
+    access: CommandAccess,
     executors: FxHashSet<dscale::Pid>,
 }
 
@@ -40,6 +41,7 @@ impl ConflictTracker {
         Self {
             replica_count,
             commands: FxHashMap::default(),
+            by_key: FxHashMap::default(),
             conflicting_commands: 0,
             executed_commands: 0,
             paths: FxHashMap::default(),
@@ -47,40 +49,51 @@ impl ConflictTracker {
         }
     }
 
-    fn record_arrival(&mut self, cmd_id: CmdId, key: usize) {
-        self.commands
-            .entry(cmd_id)
-            .or_insert_with(|| TrackedCommand {
-                key,
+    fn record_arrival(&mut self, cmd_id: CmdId, access: CommandAccess) {
+        if let std::collections::hash_map::Entry::Vacant(entry) = self.commands.entry(cmd_id) {
+            entry.insert(TrackedCommand {
+                access,
                 executors: FxHashSet::default(),
             });
+            for key in access.keys() {
+                self.by_key.entry(key).or_default().insert(cmd_id);
+            }
+        }
     }
 
-    fn record_execution(&mut self, pid: dscale::Pid, cmd_id: CmdId, key: usize) {
+    fn record_execution(&mut self, pid: dscale::Pid, cmd_id: CmdId, access: CommandAccess) {
         let first_execution = self
             .commands
             .get(&cmd_id)
             .is_none_or(|command| command.executors.is_empty());
         if first_execution {
             self.executed_commands += 1;
-            self.conflicting_commands +=
-                usize::from(self.commands.iter().any(|(&other_id, other)| {
-                    other_id != cmd_id
-                        && other.key == key
-                        && other.executors.len() < self.replica_count
-                }));
+            self.conflicting_commands += usize::from(access.keys().any(|key| {
+                self.by_key.get(&key).is_some_and(|ids| {
+                    ids.iter().any(|other_id| {
+                        *other_id != cmd_id
+                            && self.commands[other_id].executors.len() < self.replica_count
+                    })
+                })
+            }));
         }
 
-        let command = self
-            .commands
-            .entry(cmd_id)
-            .or_insert_with(|| TrackedCommand {
-                key,
-                executors: FxHashSet::default(),
-            });
+        self.record_arrival(cmd_id, access);
+        let command = self.commands.get_mut(&cmd_id).expect("command must exist");
         command.executors.insert(pid);
         if command.executors.len() == self.replica_count {
+            let access = command.access;
             self.commands.remove(&cmd_id);
+            for key in access.keys() {
+                if let std::collections::hash_map::Entry::Occupied(mut bucket) =
+                    self.by_key.entry(key)
+                {
+                    bucket.get_mut().remove(&cmd_id);
+                    if bucket.get().is_empty() {
+                        bucket.remove();
+                    }
+                }
+            }
         }
     }
 
@@ -154,15 +167,17 @@ impl CmdLog {
         if self.stable.contains(&cmd.id) {
             return Vec::new();
         }
-        let conflicts = self
-            .by_key
-            .get(&cmd.key)
-            .into_iter()
-            .flatten()
+        let mut conflicts: Vec<_> = cmd
+            .access
+            .keys()
+            .flat_map(|key| self.by_key.get(&key).into_iter().flatten())
+            .filter(|&&id| id != cmd.id)
             .filter_map(|id| self.entries.get(id))
             .filter(|entry| entry.phase != Phase::Stable)
             .filter_map(|entry| entry.cmd.map(|cmd| cmd.id))
             .collect();
+        conflicts.sort_unstable();
+        conflicts.dedup();
 
         let entry = self.entries.entry(cmd.id).or_insert_with(|| Entry {
             cmd: None,
@@ -173,7 +188,9 @@ impl CmdLog {
         });
         if entry.cmd.is_none() {
             entry.cmd = Some(cmd);
-            self.by_key.entry(cmd.key).or_default().push(cmd.id);
+            for key in cmd.access.keys() {
+                self.by_key.entry(key).or_default().push(cmd.id);
+            }
         }
 
         conflicts
@@ -209,11 +226,20 @@ impl CmdLog {
             let entry = self.entries.get_mut(&id).expect("entry must exist");
             entry.phase = Phase::Stable;
             let latency = dscale::now() - entry.submitted_at;
-            let key = entry.cmd.as_ref().map(|cmd| cmd.key);
+            let access = entry.cmd.map(|cmd| cmd.access);
             record_latency(latency, id.pid == dscale::pid());
             self.try_execute(id);
-            if let Some(bucket) = key.and_then(|key| self.by_key.get_mut(&key)) {
-                bucket.retain(|&bucketed| bucketed != id);
+            if let Some(access) = access {
+                for key in access.keys() {
+                    if let std::collections::hash_map::Entry::Occupied(mut bucket) =
+                        self.by_key.entry(key)
+                    {
+                        bucket.get_mut().retain(|&bucketed| bucketed != id);
+                        if bucket.get().is_empty() {
+                            bucket.remove();
+                        }
+                    }
+                }
             }
             self.entries.remove(&id);
             self.stable.insert(id);
@@ -256,7 +282,7 @@ impl CmdLog {
                 {
                     entry.executed = true;
                     if let Some(cmd) = entry.cmd {
-                        record_execution(cmd.id, cmd.key);
+                        record_execution(cmd.id, cmd.access);
                     }
                 }
             }
@@ -371,18 +397,18 @@ pub fn average_commit_latency() -> f64 {
     }
 }
 
-pub fn record_arrival(cmd_id: CmdId, key: usize) {
+pub fn record_arrival(cmd_id: CmdId, access: CommandAccess) {
     kv::modify::<ConflictTracker>(KEY_CONFLICT_RATE, |tracker| {
-        tracker.record_arrival(cmd_id, key);
+        tracker.record_arrival(cmd_id, access);
     });
 }
 
-fn record_execution(cmd_id: CmdId, key: usize) {
+fn record_execution(cmd_id: CmdId, access: CommandAccess) {
     if !kv::get::<bool>(KEY_TRACK_CONFLICT_RATE) {
         return;
     }
     kv::modify::<ConflictTracker>(KEY_CONFLICT_RATE, |tracker| {
-        tracker.record_execution(dscale::pid(), cmd_id, key);
+        tracker.record_execution(dscale::pid(), cmd_id, access);
     });
 }
 

@@ -1,6 +1,6 @@
 use std::{hint, sync::Arc};
 
-use client::CmdId;
+use client::{CmdId, ReplayState};
 use dscale::{
     Jiffies,
     rand::{SeedableRng, prelude::Distribution, rngs::SmallRng},
@@ -24,6 +24,7 @@ pub struct BLSMR {
     key_count: usize,
     key_zipf: Option<Zipf<f64>>,
     current_submit_timer_id: dscale::TimerId,
+    replay: Option<ReplayState>,
     track_conflict_rate: bool,
     dds: DDS,
     quorum: Quorum,
@@ -42,6 +43,7 @@ impl Default for BLSMR {
                 Zipf::new(key_count as f64, exponent).expect("invalid Zipf distribution")
             }),
             current_submit_timer_id: 0,
+            replay: ReplayState::from_kv(),
             track_conflict_rate: kv::get(KEY_TRACK_CONFLICT_RATE),
             dds: DDS::default(),
             quorum: Quorum::default(),
@@ -51,7 +53,9 @@ impl Default for BLSMR {
 
 impl dscale::Process for BLSMR {
     fn on_start(&mut self) {
-        if self.submit_limit != 0 {
+        if let Some(replay) = &mut self.replay {
+            replay.start();
+        } else if self.submit_limit != 0 {
             self.sched_submit();
         }
     }
@@ -60,7 +64,7 @@ impl dscale::Process for BLSMR {
             if self.track_conflict_rate
                 && let Announce::Req(req) = announce_message
             {
-                log::record_arrival(req.cmd.id, req.cmd.key);
+                log::record_arrival(req.cmd.id, req.cmd.access);
             }
             let status = self.dds.on_message(from, announce_message);
             self.handle_announce_status(status);
@@ -73,13 +77,27 @@ impl dscale::Process for BLSMR {
         if self.dds.is_my_timer(id) {
             let status = self.dds.on_timer(id);
             self.handle_announce_status(status);
-        } else if id == self.current_submit_timer_id {
+        } else if self
+            .replay
+            .as_ref()
+            .is_some_and(|replay| replay.is_timer(id))
+        {
+            let replay = self.replay.as_mut().unwrap();
+            for record in replay.take_due(id) {
+                let cmd = client::create_transfer(record.from, record.to, record.amount);
+                if self.track_conflict_rate {
+                    log::record_arrival(cmd.id, cmd.access);
+                }
+                self.dds.announce(cmd);
+                replay.record_submission(&record);
+            }
+        } else if self.replay.is_none() && id == self.current_submit_timer_id {
             let cmd = match self.key_zipf {
                 Some(zipf) => client::create_cmd_for_key(zipf.sample(&mut self.rng) as usize - 1),
                 None => client::create_cmd(&mut self.rng, self.key_count),
             };
             if self.track_conflict_rate {
-                log::record_arrival(cmd.id, cmd.key);
+                log::record_arrival(cmd.id, cmd.access);
             }
             self.dds.announce(cmd);
             self.submitted += 1;

@@ -3,7 +3,7 @@ use std::sync::{
     atomic::{AtomicBool, AtomicUsize, Ordering},
 };
 
-use client::{CmdId, Command};
+use client::{CmdId, Command, ReplayState};
 use dscale::{helpers::Quorum, services::kv, *};
 use rustc_hash::FxHashMap;
 
@@ -67,6 +67,7 @@ pub struct Hotstuff<const ROTATING: bool> {
     submit_limit: usize,
     submitted: usize,
     current_submit_timer_id: TimerId,
+    replay: Option<ReplayState>,
     block_commits: Arc<AtomicUsize>,
     pending_commands: FxHashMap<CmdId, Arc<SubmittedCommand>>,
     pending_quorums: FxHashMap<NodeId, (usize, Quorum<()>)>,
@@ -89,6 +90,7 @@ impl<const ROTATING: bool> Default for Hotstuff<ROTATING> {
             submit_limit: kv::get(KEY_SUBMIT_LIMIT),
             submitted: 0,
             current_submit_timer_id: 0,
+            replay: ReplayState::from_kv(),
             block_commits: kv::get(KEY_BLOCK_COMMITS),
             pending_commands: FxHashMap::default(),
             pending_quorums: FxHashMap::default(),
@@ -103,7 +105,9 @@ impl<const ROTATING: bool> Default for Hotstuff<ROTATING> {
 
 impl<const ROTATING: bool> Process for Hotstuff<ROTATING> {
     fn on_start(&mut self) {
-        if self.submit_limit != 0 {
+        if let Some(replay) = &mut self.replay {
+            replay.start();
+        } else if self.submit_limit != 0 {
             self.schedule_submit();
         }
         if pid() == 0 {
@@ -152,9 +156,29 @@ impl<const ROTATING: bool> Process for Hotstuff<ROTATING> {
     }
 
     fn on_timer(&mut self, id: TimerId) {
+        if let Some(replay) = &mut self.replay {
+            assert!(replay.is_timer(id), "unknown timer");
+            let records = replay.take_due(id);
+            for record in records {
+                let command = client::create_transfer(record.from, record.to, record.amount);
+                self.submit(command);
+                self.replay.as_ref().unwrap().record_submission(&record);
+            }
+            return;
+        }
         assert_eq!(id, self.current_submit_timer_id, "unknown timer");
+        self.submit(client::create_cmd_for_key(0));
+        self.submitted += 1;
+        if self.submitted < self.submit_limit {
+            self.schedule_submit();
+        }
+    }
+}
+
+impl<const ROTATING: bool> Hotstuff<ROTATING> {
+    fn submit(&mut self, command: Command) {
         let command = Arc::new(SubmittedCommand {
-            command: client::create_cmd_for_key(0),
+            command,
             submitted_at: now(),
             committed: AtomicBool::new(false),
         });
@@ -165,14 +189,8 @@ impl<const ROTATING: bool> Process for Hotstuff<ROTATING> {
             .filter(|replica| *replica != pid())
             .collect::<Vec<_>>();
         send_many(&remotes, HSMessage::Submit(command));
-        self.submitted += 1;
-        if self.submitted < self.submit_limit {
-            self.schedule_submit();
-        }
     }
-}
 
-impl<const ROTATING: bool> Hotstuff<ROTATING> {
     fn update(&mut self, node: Arc<Node>) {
         let grandparent = node.parent().and_then(|parent| parent.parent());
         let great_grandparent = grandparent.as_ref().and_then(|parent| parent.parent());
