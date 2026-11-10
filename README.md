@@ -65,7 +65,7 @@ arrival window at an aggregate 1,800 transactions/s. Every replica hosts ten
 virtual clients: the 4-, 6-, and 25-replica variants have 40, 60, and 250
 clients, offering 45, 30, and 7.2 transactions/s per client, respectively.
 Clients are assigned round-robin to replica ordinals. Global event `i` is
-scheduled at `round(i * 1,000,000 / 1,800)` microseconds, assigned to client
+scheduled at `round(i * 1,000 / 1,800)` milliseconds, assigned to client
 `i % client_count`, and uses that client's sequence `i / client_count`. Thus
 arrivals are spread across clients and replicas rather than synchronized.
 
@@ -99,10 +99,11 @@ perfectly correlated directional halves. It is not a measured one-way jitter,
 and the sample has non-Gaussian tails. Other assumptions and route or temporal
 variation would produce different results.
 
-Dscale samples native normal distributions in 1 µs jiffies, rounding the pair
-mean to the nearest microsecond and samples to integer microseconds, then
-clamping to `[1 µs, ceil(mean + 6 × 0.593 ms)]`. Within-region links, including
-self-delivery, are fixed at 1 µs; the uniform topology remains fixed at 100 ms.
+Dscale samples native normal distributions in 1 ms jiffies, rounding the pair
+mean to the nearest millisecond and the standard deviation to 1 ms, then
+clamping samples to `[1 ms, ceil(mean + 6 ms)]`. This quantization increases
+the modeled jitter from 0.593 ms to 1 ms. Within-region links, including
+self-delivery, are fixed at 0 µs; the uniform topology remains fixed at 100 ms.
 The runtime does not fetch measurements. To regenerate the embedded pair means,
 download `cloudping_may24_jan25.tgz` from the dataset record (SHA-256
 `549adec2a11a8bbf30a036d909784f456a104ad18d34d4cf0875b05966b13faf`) and run:

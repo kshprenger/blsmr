@@ -26,15 +26,15 @@ use hotstuff::{
     KEY_SUBMIT_LIMIT as HOTSTUFF_SUBMIT_LIMIT, Node, NonRotatingHotstuff,
 };
 
-const TIME_BUDGET: Jiffies = Jiffies(2_000_000_000);
-const UNIFORM_LATENCY: Jiffies = Jiffies(100_000);
+const TIME_BUDGET: Jiffies = Jiffies(2_000_000);
+const UNIFORM_LATENCY: Jiffies = Jiffies(100);
 const SEED: u64 = 42;
 const ACCOUNT_COUNT: usize = 10_000;
 const WORKLOAD_SEED: u64 = 42;
-const WINTERMUTE_SUBMIT_INTERVAL: Jiffies = Jiffies(55_000);
+const WINTERMUTE_SUBMIT_INTERVAL: Jiffies = Jiffies(55);
 const THREE_JANE_FAULTS: usize = 1;
 const REGION_COUNT: usize = 8;
-const TERRESTRIAL_STD_DEV: usize = 593;
+const TERRESTRIAL_STD_DEV: usize = 1;
 
 #[derive(Clone, Copy)]
 enum NetworkTopology {
@@ -67,7 +67,7 @@ fn path_csv_path() -> PathBuf {
 fn builder() -> SimulationBuilder {
     SimulationBuilder::new()
         .default_bandwidth(BandwidthConfig::Unbounded)
-        .jiffies_per_second(1_000_000)
+        .jiffies_per_second(1_000)
         .time_budget(TIME_BUDGET)
         .seed(SEED)
         .seq_sched()
@@ -119,7 +119,7 @@ fn terrestrial_builder<P: Process + Default + Send + 'static>(
         simulation = simulation.add_to_pool::<P>(&region.name, 1);
     }
     for region in regions {
-        simulation = simulation.within_pool_latency(&region.name, fixed_latency(Jiffies(1)));
+        simulation = simulation.within_pool_latency(&region.name, fixed_latency(Jiffies(0)));
     }
     for (index, from) in regions.iter().enumerate() {
         for to in &regions[index + 1..] {
@@ -185,10 +185,10 @@ fn terrestrial_pair_means() -> HashMap<(&'static str, &'static str), f64> {
 
 fn normal_latency(mean_ms: f64) -> LatencyDistribution {
     LatencyDistribution::Normal {
-        mean: Jiffies((mean_ms * 1_000.0).round() as usize),
+        mean: Jiffies(mean_ms.round() as usize),
         std_dev: Jiffies(TERRESTRIAL_STD_DEV),
         low: Jiffies(1),
-        high: Jiffies(((mean_ms + 6.0 * 0.593) * 1_000.0).ceil() as usize),
+        high: Jiffies((mean_ms + 6.0 * 1.0).ceil() as usize),
     }
 }
 
@@ -254,7 +254,7 @@ fn run_bullshark(topology: NetworkTopology, trace: &Arc<client::ReplayTrace>) ->
     }
     .build();
     let metrics = configure_replay(trace);
-    kv::set(bullshark::KEY_ROUND_TIMEOUT, Jiffies(10_000_000));
+    kv::set(bullshark::KEY_ROUND_TIMEOUT, Jiffies(10_000));
     kv::set(BULLSHARK_SUBMIT_INTERVAL, WINTERMUTE_SUBMIT_INTERVAL);
     kv::set(BULLSHARK_SUBMIT_LIMIT, usize::MAX);
     kv::set(BULLSHARK_BLOCK_COMMITS, Arc::new(AtomicUsize::new(0)));
@@ -291,7 +291,7 @@ fn run_blsmr(
     kv::set(KEY_SUBMIT_INTERVAL, WINTERMUTE_SUBMIT_INTERVAL);
     kv::set(KEY_SUBMIT_LIMIT, usize::MAX);
     kv::set(KEY_TRACK_CONFLICT_RATE, true);
-    kv::set(KEY_ANNOUNCE_TIMEOUT, Jiffies(500_000));
+    kv::set(KEY_ANNOUNCE_TIMEOUT, Jiffies(500));
     kv::set(KEY_KEY_COUNT, 512usize);
     kv::set::<Option<f64>>(KEY_ZIPF_EXPONENT, None);
     kv::set(KEY_QUORUM_SYSTEM, quorum_system);
@@ -323,7 +323,7 @@ fn write_samples(
             file,
             "{},{protocol},{:.3}",
             topology.name(),
-            latency.0 as f64 / 1_000.0
+            latency.0 as f64
         )
         .expect("failed to write latency sample");
     }
@@ -368,14 +368,19 @@ fn main() {
     let traces: HashMap<usize, Arc<client::ReplayTrace>> = [4, 6, 25]
         .into_iter()
         .map(|replicas| {
-            (
-                replicas,
-                Arc::new(client::generate_visa_trace(
-                    ACCOUNT_COUNT,
-                    WORKLOAD_SEED,
-                    replicas,
-                )),
-            )
+            (replicas, {
+                let mut trace = client::generate_visa_trace(ACCOUNT_COUNT, WORKLOAD_SEED, replicas);
+                for (index, record) in trace.records.iter_mut().enumerate() {
+                    record.at = Jiffies(
+                        (index * 1_000 + client::VISA_TRANSFERS_PER_SECOND / 2)
+                            / client::VISA_TRANSFERS_PER_SECOND,
+                    );
+                }
+                trace
+                    .records
+                    .sort_by_key(|record| (record.at, record.client_id, record.sequence));
+                Arc::new(trace)
+            })
         })
         .collect();
     let path = csv_path();
