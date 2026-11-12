@@ -99,10 +99,10 @@ perfectly correlated directional halves. It is not a measured one-way jitter,
 and the sample has non-Gaussian tails. Other assumptions and route or temporal
 variation would produce different results.
 
-Dscale samples native normal distributions in 1 ms jiffies, rounding the pair
-mean to the nearest millisecond and the standard deviation to 1 ms, then
-clamping samples to `[1 ms, ceil(mean + 6 ms)]`. This quantization increases
-the modeled jitter from 0.593 ms to 1 ms. Within-region links, including
+Dscale samples native normal distributions in 1 µs jiffies, rounding the pair
+mean to the nearest microsecond and using a standard deviation of 593 µs, then
+clamping samples to `[1 µs, ceil(mean + 6 × 593 µs)]`. The conflict-rate CSV also retains its `avg_latency_jiffies` column name but
+reports milliseconds. Within-region links, including
 self-delivery, are fixed at 0 µs; the uniform topology remains fixed at 100 ms.
 The runtime does not fetch measurements. To regenerate the embedded pair means,
 download `cloudping_may24_jan25.tgz` from the dataset record (SHA-256

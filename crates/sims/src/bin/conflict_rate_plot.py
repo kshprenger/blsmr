@@ -103,7 +103,7 @@ def main():
     )
 
     ax.set_xlabel("conflict rate (%)", color=SECONDARY_INK)
-    ax.set_ylabel("average latency (jiffies)", color=MARKER)
+    ax.set_ylabel("average latency (ms)", color=MARKER)
     fast_path_ax.set_ylabel("fast-path rate (%)", color=FAST_PATH)
     ax.set_xlim(0, 100)
     ax.set_ylim(bottom=0)

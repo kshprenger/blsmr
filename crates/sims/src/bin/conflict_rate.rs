@@ -1,4 +1,9 @@
-use std::{fs::File, io::Write, path::PathBuf};
+use std::{
+    collections::{HashMap, HashSet},
+    fs::File,
+    io::Write,
+    path::PathBuf,
+};
 
 use blsmr::{
     BLSMRProtocol, KEY_ANNOUNCE_TIMEOUT, KEY_AVG_COMMIT_LATENCY, KEY_COMMIT_LATENCIES,
@@ -12,13 +17,13 @@ use dscale::{
 };
 
 const REPLICAS: usize = 6;
-const TIME_BUDGET: Jiffies = Jiffies(2_000_000);
+const TIME_BUDGET: Jiffies = Jiffies(2_000_000_000);
 const KEY_COUNT: usize = 32;
 const COMMANDS_PER_REPLICA: usize = 20;
-const ANNOUNCE_TIMEOUT: Jiffies = Jiffies(500);
+const ANNOUNCE_TIMEOUT: Jiffies = Jiffies(500_000);
 const SEEDS: [u64; 5] = [42, 43, 44, 45, 46];
-const EARTH_RADIUS_KM: f64 = 6_371.0;
-const LIGHT_SPEED_KM_PER_SECOND: f64 = 299_792.458;
+const REGION_COUNT: usize = 8;
+const TERRESTRIAL_STD_DEV: usize = 593;
 
 #[derive(Clone, Copy)]
 struct Params {
@@ -28,8 +33,6 @@ struct Params {
 
 struct Region {
     name: String,
-    latitude: f64,
-    longitude: f64,
 }
 
 fn sweep() -> Vec<Params> {
@@ -37,7 +40,7 @@ fn sweep() -> Vec<Params> {
         .into_iter()
         .flat_map(|submit_interval| {
             SEEDS.into_iter().map(move |seed| Params {
-                submit_interval: Jiffies(submit_interval),
+                submit_interval: Jiffies(submit_interval * 1_000),
                 seed,
             })
         })
@@ -48,21 +51,12 @@ fn regions(seed: u64) -> Vec<Region> {
     let mut regions = include_str!("latency_cdf/aws_regions.csv")
         .lines()
         .skip(1)
-        .map(|line| {
-            let mut fields = line.split(',');
-            Region {
-                name: fields.next().expect("missing AWS Region ID").to_owned(),
-                latitude: fields
-                    .next()
-                    .expect("missing latitude")
-                    .parse()
-                    .expect("invalid latitude"),
-                longitude: fields
-                    .next()
-                    .expect("missing longitude")
-                    .parse()
-                    .expect("invalid longitude"),
-            }
+        .map(|line| Region {
+            name: line
+                .split(',')
+                .next()
+                .expect("missing AWS Region ID")
+                .to_owned(),
         })
         .collect::<Vec<_>>();
     regions.shuffle(&mut SmallRng::seed_from_u64(seed));
@@ -77,21 +71,67 @@ fn fixed_latency(latency: Jiffies) -> LatencyDistribution {
     }
 }
 
-fn light_latency(from: &Region, to: &Region) -> Jiffies {
-    let latitude_delta = (to.latitude - from.latitude).to_radians();
-    let longitude_delta = (to.longitude - from.longitude).to_radians();
-    let from_latitude = from.latitude.to_radians();
-    let to_latitude = to.latitude.to_radians();
-    let half_chord = (latitude_delta / 2.0).sin().powi(2)
-        + from_latitude.cos() * to_latitude.cos() * (longitude_delta / 2.0).sin().powi(2);
-    let distance_km = EARTH_RADIUS_KM * 2.0 * half_chord.sqrt().asin();
-    Jiffies((distance_km / LIGHT_SPEED_KM_PER_SECOND * 1_000.0).ceil() as usize)
+fn terrestrial_pair_means() -> HashMap<(&'static str, &'static str), f64> {
+    let regions: HashSet<_> = include_str!("latency_cdf/aws_regions.csv")
+        .lines()
+        .skip(1)
+        .map(|line| line.split(',').next().expect("missing AWS Region ID"))
+        .collect();
+    assert_eq!(
+        regions.len(),
+        REGION_COUNT,
+        "expected eight unique AWS regions"
+    );
+    let mut means = HashMap::new();
+    for line in include_str!("latency_cdf/aws_pair_means.csv")
+        .lines()
+        .skip(1)
+    {
+        let mut fields = line.split(',');
+        let from = fields.next().expect("missing source region");
+        let to = fields.next().expect("missing destination region");
+        let mean: f64 = fields
+            .next()
+            .expect("missing pair mean")
+            .parse()
+            .expect("invalid pair mean");
+        assert!(
+            from != to && regions.contains(from) && regions.contains(to),
+            "invalid AWS region pair"
+        );
+        assert!(mean.is_finite() && mean > 0.0, "invalid pair mean");
+        assert!(
+            means.insert((from, to), mean).is_none(),
+            "duplicate AWS region pair"
+        );
+        assert!(
+            means.insert((to, from), mean).is_none(),
+            "duplicate AWS region pair"
+        );
+    }
+    assert_eq!(
+        means.len(),
+        REGION_COUNT * (REGION_COUNT - 1),
+        "incomplete AWS region pairs"
+    );
+    means
+}
+
+fn normal_latency(mean_ms: f64) -> LatencyDistribution {
+    LatencyDistribution::Normal {
+        mean: Jiffies((mean_ms * 1_000.0).round() as usize),
+        std_dev: Jiffies(TERRESTRIAL_STD_DEV),
+        low: Jiffies(1),
+        high: Jiffies((mean_ms * 1_000.0 + 6.0 * TERRESTRIAL_STD_DEV as f64).ceil() as usize),
+    }
 }
 
 fn simulation(seed: u64) -> dscale::Runner {
     let regions = regions(seed);
+    let means = terrestrial_pair_means();
     let mut builder = SimulationBuilder::new()
         .default_bandwidth(BandwidthConfig::Unbounded)
+        .jiffies_per_second(1_000_000)
         .time_budget(TIME_BUDGET)
         .seed(seed)
         .par_sched(dscale::ThreadNumber::MatchCores);
@@ -106,7 +146,11 @@ fn simulation(seed: u64) -> dscale::Runner {
             builder = builder.between_pool_latency(
                 &from.name,
                 &to.name,
-                fixed_latency(light_latency(from, to)),
+                normal_latency(
+                    *means
+                        .get(&(from.name.as_str(), to.name.as_str()))
+                        .expect("missing AWS region pair"),
+                ),
             );
         }
     }
@@ -137,7 +181,7 @@ fn run_once(params: Params) -> (Params, f64, f64, f64) {
     (
         params,
         log::conflict_rate_percentage(),
-        log::average_commit_latency(),
+        log::average_commit_latency() / 1_000.0,
         log::fast_path_percentage(),
     )
 }
@@ -163,7 +207,7 @@ fn main() {
         writeln!(
             file,
             "{KEY_COUNT},{COMMANDS_PER_REPLICA},{},{},{},{conflict_rate:.4},{latency:.4},{fast_path_rate:.4}",
-            params.submit_interval.0, ANNOUNCE_TIMEOUT.0, params.seed
+            params.submit_interval.0 / 1_000, ANNOUNCE_TIMEOUT.0 / 1_000, params.seed
         )
         .expect("failed to write row");
     }
